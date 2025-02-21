@@ -1999,4 +1999,130 @@ def observer_units(Tvals, rmsvals, zvals, nuobsvals, params):
 
     return obsunitdict
 
-    
+    # My (Ella's) stuff begins here. This can be reorganized to fit the organiztion of stack,py later.
+
+    def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
+                  plots=False):
+  
+    # THIS IS NOT A PRF
+    def Gaussian2D(x, y, xcent, ycent, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1):
+        gauss2D = (1 / (2 * np.pi * xstd * ystd)) * ((np.exp(((-1) * (x - xcent) ** 2) / (2 * xstd ** 2))) * (
+            np.exp(((-1) * (y - ycent) ** 2) / (2 * ystd ** 2))))
+
+        return gauss2D
+
+    def Gaussian2Derf(x, y, xcent, ycent, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1):
+        gauss2Derf = (total_flux / 4) * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf(
+            (x - xcent - 0.5) / (np.sqrt(2) * xstd))) * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf(
+            (y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+
+        return gauss2Derf
+
+    x, y = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize))
+    gaussarray = Gaussian2Derf(x, y, xcent, ycent, xstd, ystd, xsize, ysize, total_flux)
+
+    if plots:
+        plt.imshow(gaussarray, cmap='gist_heat')
+        plt.colorbar()
+        plt.show()
+    # need to make it so that when I integrate it, it comes out to total flux
+    return gaussarray
+
+
+
+# Idk why x is swapped with y on on this
+# For whatever reason I had to swap x and y in the gaussian array above when values are assigned.
+# idk if this still exists
+
+
+# I also need to generally clean up this code (the
+# functions don't need all the values I am passing to them right now, etc.)
+
+
+def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
+                  ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None):
+    # only can put in spatstd alone or (xstd and ystd together). spatstd takes priority in all cases.
+    # DO NOT specify spatstd if you do not want a circular gaussian
+    if spatstd is not None:
+        xstd = spatstd
+        ystd = spatstd
+
+    # Makes the 2D profile with function above. I need to rename this function to be more specific.
+    # Putting flux = 1 should fix issues with double counting
+    spatial_array = Gaussian2DPRF(xcent, ycent, xstd, ystd, xsize, ysize, 1, plots=False)
+
+    def Gaussian1Derf(z, zcent, zstd, total_flux):
+        gauss1Derf = (total_flux / 2) * (
+                    sp.erf((z - zcent + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent - 0.5) / (np.sqrt(2) * zstd)))
+        return gauss1Derf
+
+    # make a 3D array with slices of spatial_array the amount of times of specsize
+    spatspec_cube = np.repeat(spatial_array[:, :, np.newaxis], specsize, axis=2)
+
+    s = np.arange(0, specsize)
+    specweight = Gaussian1Derf(s, speccent, specstd, total_flux)
+
+    # weight our cube/rectangular prism based on a gaussian defined by the parameters we input.
+    spatspec_cube = spatspec_cube * specweight  # multiplies. Idk if it works as intended though. I didn't test it except
+    # for the fact that it visually looks as it should
+    if plots:
+        if plot_interval is None:
+            # plot_interval is how many pixels we deviate from the center. Must be an integer and not go out of bounds.
+            # defaults to the standard deviation of the spectrum.
+            plot_interval = specstd
+
+        spatspec_front = spatspec_cube[:, :, int(speccent) - int(plot_interval)]
+        spatspec_middle = spatspec_cube[:, :, int(speccent)]
+        spatspec_back = spatspec_cube[:, :, int(speccent) + int(plot_interval)]
+
+        # Just scaling the colormaps to be the same across all plots
+        scalestack = np.vstack((spatspec_front, spatspec_middle, spatspec_back))
+        vmin = np.min(scalestack)
+        vmax = np.max(scalestack)
+
+        # plot the stuff
+        fig, axs = plt.subplots(1, 3, figsize=(20, 5))
+        xsection0 = axs[0].imshow(spatspec_front, cmap='gist_heat', vmin=vmin, vmax=vmax)
+        ax0title = 'z = ' + str(
+            int(speccent) - int(plot_interval))  # matplotlib was being moody, so I'm defining the title externally
+        axs[0].set_title(ax0title)
+
+        xsection1 = axs[1].imshow(spatspec_middle, cmap='gist_heat', vmin=vmin, vmax=vmax)
+        ax1title = 'z = ' + str(int(speccent))
+        axs[1].set_title(ax1title)
+
+        xsection2 = axs[2].imshow(spatspec_back, cmap='gist_heat', vmin=vmin, vmax=vmax)
+        ax2title = 'z = ' + str(int(speccent) + int(plot_interval))
+        axs[2].set_title(ax2title)
+
+        fig.suptitle('Snapshots of spectral axis \n std dev: ' + str(specstd) + '\n Interval: ' + str(
+            plot_interval) + '\n center: z=' + str(speccent))
+        # fig.colorbar(xsection0, ax=axs[0])
+        # fig.colorbar(xsection1, ax=axs[1])
+        fig.colorbar(xsection2, ax=axs[2])
+
+        plt.tight_layout()
+        plt.show()
+
+    return spatspec_cube
+
+
+def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
+                  specsize=200, total_flux=1, noise_array=None):
+
+    # The function I am fitting to the noisy data
+    def gauss3d_fitfunc(data, amp):
+        x, y, spec = data
+
+        # total_flux is unneeded here, so I got rid of it
+        return ((amp / 8)
+                * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+                * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+                * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
+
+    X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize))
+    coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
+    popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, noise_array.ravel(), p0=2, maxfev=2000) # , bounds=[0, float('inf')])
+    # p0 amplitude will need to be changed depending on the scale of the actual data
+    # set bounds to be positive because it sometimes gave negative bounds. This fixed some of my non-negative issues and I am unsure why.
+    return popt, pcov
