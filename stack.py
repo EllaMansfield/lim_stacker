@@ -1328,7 +1328,7 @@ def single_cutout(idx, galcat, comap, params):
     #     params.physicalspace = False
 
     # My (Ella's) Code
-    if params.PRF_Fitting == True:
+    if params.prf_fitting == True:
         
         # I grabbed this from other code in stack.py
         # actual COMAP beam
@@ -1337,8 +1337,10 @@ def single_cutout(idx, galcat, comap, params):
         sigma_y = sigma_x
 
         # placeholder spectral standard deviation
-        amp, pcov = fit_amplitude(cutout.x, cutout.y, cutout.z, sigma_x, sigma_y, spatstd=None, specstd=1, xsize=xsize, ysize=ysize, specsize=specsize, noise_array=cutout)
-        cutout = Gaussian3DPRF(xcent=x, ycent=y, speccent=z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1, xsize=xsize, ysize=ysize, specsize=specsize, total_flux=amp, plots=False)
+        amp, pcov = fit_amplitude(cutout.x, cutout.y, cutout.z, sigma_x, sigma_y, spatstd=None, specstd=1,
+                                   xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=cutout)
+        cutout = Gaussian3DPRF(xcent=cutout.x, ycent=cutout.y, speccent=cutout.z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
+                                xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
 
     return cutout
 
