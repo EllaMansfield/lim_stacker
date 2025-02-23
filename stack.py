@@ -1327,6 +1327,19 @@ def single_cutout(idx, galcat, comap, params):
     #     print('params.physicalspace not set: defaulting to false')
     #     params.physicalspace = False
 
+    # My (Ella's) Code
+    if params.PRF_Fitting == True:
+        
+        # I grabbed this from other code in stack.py
+        # actual COMAP beam
+        beam_fwhm = 4.5 * u.arcmin
+        sigma_x = beam_fwhm / (2 * np.sqrt(2 * np.log(2)))
+        sigma_y = sigma_x
+
+        # placeholder spectral standard deviation
+        amp, pcov = fit_amplitude(cutout.x, cutout.y, cutout.z, sigma_x, sigma_y, spatstd=None, specstd=1, xsize=xsize, ysize=ysize, specsize=specsize, noise_array=cutout)
+        cutout = Gaussian3DPRF(xcent=x, ycent=y, speccent=z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1, xsize=xsize, ysize=ysize, specsize=specsize, total_flux=amp, plots=False)
+
     return cutout
 
 
@@ -2095,11 +2108,11 @@ def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spa
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
                   specsize=200, total_flux=1, noise_array=None):
 
-    # The function I am fitting to the noisy data
+    # The PRF function I fit to the noisy data. 
     def gauss3d_fitfunc(data, amp):
         x, y, spec = data
 
-        # total_flux is unneeded here, so I got rid of it
+        # total_flux is unneeded here (it's the same as the amplitude)
         return ((amp / 8)
                 * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
                 * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
