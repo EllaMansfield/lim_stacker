@@ -26,6 +26,10 @@ from reproject import reproject_adaptive
 from photutils.psf import IntegratedGaussianPRF, PSFPhotometry
 from astropy.table import QTable
 
+# for fitting gaussian 3D PRF extraction
+from scipy import special as sp
+from scipy.optimize import curve_fit
+
 # ignore warnings:
 # divide by zero
 np.seterr(divide='ignore', invalid='ignore')
@@ -1999,23 +2003,15 @@ def observer_units(Tvals, rmsvals, zvals, nuobsvals, params):
 
     return obsunitdict
 
-    # My (Ella's) stuff begins here. This can be reorganized to fit the organiztion of stack,py later.
+# My (Ella's) stuff begins here. This can be reorganized to fit the organiztion of stack,py later.
 
-    def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
+def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
                   plots=False):
-  
-    # THIS IS NOT A PRF
-    def Gaussian2D(x, y, xcent, ycent, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1):
-        gauss2D = (1 / (2 * np.pi * xstd * ystd)) * ((np.exp(((-1) * (x - xcent) ** 2) / (2 * xstd ** 2))) * (
-            np.exp(((-1) * (y - ycent) ** 2) / (2 * ystd ** 2))))
-
-        return gauss2D
-
+    
     def Gaussian2Derf(x, y, xcent, ycent, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1):
         gauss2Derf = (total_flux / 4) * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf(
-            (x - xcent - 0.5) / (np.sqrt(2) * xstd))) * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf(
-            (y - ycent - 0.5) / (np.sqrt(2) * ystd)))
-
+        (x - xcent - 0.5) / (np.sqrt(2) * xstd))) * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf(
+        (y - ycent - 0.5) / (np.sqrt(2) * ystd)))
         return gauss2Derf
 
     x, y = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize))
@@ -2025,19 +2021,8 @@ def observer_units(Tvals, rmsvals, zvals, nuobsvals, params):
         plt.imshow(gaussarray, cmap='gist_heat')
         plt.colorbar()
         plt.show()
-    # need to make it so that when I integrate it, it comes out to total flux
+    # Returns a 2D PRF array
     return gaussarray
-
-
-
-# Idk why x is swapped with y on on this
-# For whatever reason I had to swap x and y in the gaussian array above when values are assigned.
-# idk if this still exists
-
-
-# I also need to generally clean up this code (the
-# functions don't need all the values I am passing to them right now, etc.)
-
 
 def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
                   ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None):
@@ -2053,7 +2038,7 @@ def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spa
 
     def Gaussian1Derf(z, zcent, zstd, total_flux):
         gauss1Derf = (total_flux / 2) * (
-                    sp.erf((z - zcent + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent - 0.5) / (np.sqrt(2) * zstd)))
+                sp.erf((z - zcent + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent - 0.5) / (np.sqrt(2) * zstd)))
         return gauss1Derf
 
     # make a 3D array with slices of spatial_array the amount of times of specsize
