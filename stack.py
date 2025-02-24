@@ -534,6 +534,21 @@ class cubelet():
 
                 spec = np.array(photflux)
                 dspec = np.array(photrms)
+        elif method == "prf_fitting":
+        # My (Ella's) Code
+            # if params.prf_fitting == True:
+                
+            # I grabbed this from other code in stack.py
+            # actual COMAP beam
+            beam_fwhm = 4.5 * u.arcmin
+            sigma_x = beam_fwhm / (2 * np.sqrt(2 * np.log(2)))
+            sigma_y = sigma_x
+
+            # placeholder spectral standard deviation
+            # amp, pcov = fit_amplitude(cutout.x, cutout.y, cutout.z, sigma_x, sigma_y, spatstd=None, specstd=1,
+            #                            xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=cutout)
+            # cutout = Gaussian3DPRF(xcent=cutout.x, ycent=cutout.y, speccent=cutout.z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
+            #                            xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
 
         self.spectrum = spec
         self.spectrumrms = dspec
@@ -1326,21 +1341,6 @@ def single_cutout(idx, galcat, comap, params):
     # except AttributeError:
     #     print('params.physicalspace not set: defaulting to false')
     #     params.physicalspace = False
-
-    # My (Ella's) Code
-    if params.prf_fitting == True:
-        
-        # I grabbed this from other code in stack.py
-        # actual COMAP beam
-        beam_fwhm = 4.5 * u.arcmin
-        sigma_x = beam_fwhm / (2 * np.sqrt(2 * np.log(2)))
-        sigma_y = sigma_x
-
-        # placeholder spectral standard deviation
-        amp, pcov = fit_amplitude(cutout.x, cutout.y, cutout.z, sigma_x, sigma_y, spatstd=None, specstd=1,
-                                   xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=cutout)
-        cutout = Gaussian3DPRF(xcent=cutout.x, ycent=cutout.y, speccent=cutout.z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
-                                xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
 
     return cutout
 
