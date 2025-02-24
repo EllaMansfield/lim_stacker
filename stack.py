@@ -580,13 +580,26 @@ class cubelet():
             # initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
 
             x = self.centpix[1] - 0.5 + self.xpixcent
+            
             y = self.centpix[2] - 0.5 + self.ypixcent
 
-            noise_array = np.array(self)
+            # noise_array = self.cube.value
+            # noise_array = np.array(noise_array)
+            # print(noise_array)
             # placeholder spectral standard deviation
-            amp, pcov = fit_amplitude(x, y, self.z_mean, sigma_x, sigma_y, spatstd=None, specstd=1,
+            print(x)
+            print(y)
+            print(self.z_mean)
+            print(sigma_x)
+            print(sigma_y)
+            print(params.xwidth)
+            print(params.ywidth)
+            print(params.freqwidth)
+
+            noise_array = self.cube
+            amp, pcov = fit_amplitude(x, y, self.z_mean, sigma_x.value, sigma_y.value, spatstd=None, specstd=1,
                                     xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=noise_array)
-            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.z_mean, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
+            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.z_mean, xstd=sigma_x.value, ystd=sigma_y.value, spatstd=None, specstd=1,
                                     xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
             
             # Currently placeholders just to see if it runs.
@@ -2154,7 +2167,7 @@ def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spa
 
 
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
-                  specsize=200, total_flux=1, noise_array=None):
+                specsize=200, total_flux=1, noise_array=None):
 
     # The PRF function I fit to the noisy data. 
     def gauss3d_fitfunc(data, amp):
