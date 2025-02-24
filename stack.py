@@ -236,7 +236,22 @@ class cubelet():
 
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum = [spec, dspec]
+        
+        if self.prf_fitting:
+            #this is just much the adaptive_photometry implementation repeated for prf_fitting
+            try:
+                oldspec = self.spectrum
+                olddspec = self.spectrumrms
+            except AttributeError:
 
+                oldspec, olddspec = self.get_spectrum(method='prf_fitting', params=params)
+
+            # get PRF spectrum
+            newspec, newdspec = cubelet.get_spectrum(method='prf_fitting', params=params)
+
+            spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
+            self.spectrum = [spec, dspec]
+            
         # housekeeping
         self.catidx.append(cutout.catidx)
         nuobs_mean = (self.nuobs_mean * self.ncutouts + cutout.freq) / (self.ncutouts + 1)
@@ -535,7 +550,7 @@ class cubelet():
                 spec = np.array(photflux)
                 dspec = np.array(photrms)
         elif method == "prf_fitting":
-        # My (Ella's) Code
+            # My (Ella's) Code
             # if params.prf_fitting == True:
                 
             # I grabbed this from other code in stack.py
@@ -545,10 +560,14 @@ class cubelet():
             sigma_y = sigma_x
 
             # placeholder spectral standard deviation
-            # amp, pcov = fit_amplitude(cutout.x, cutout.y, cutout.z, sigma_x, sigma_y, spatstd=None, specstd=1,
-            #                            xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=cutout)
-            # cutout = Gaussian3DPRF(xcent=cutout.x, ycent=cutout.y, speccent=cutout.z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
-            #                            xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
+            amp, pcov = fit_amplitude(self.x, self.y, self.z, sigma_x, sigma_y, spatstd=None, specstd=1,
+                                    xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=self)
+            PRF_fit = Gaussian3DPRF(xcent=self.x, ycent=self.y, speccent=self.z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
+                                    xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
+            
+            # Currently placeholders just to see if it runs.
+            spec = np.ones(self.cube.shape[0])
+            dspec = np.ones(self.cube.shape[0])
 
         self.spectrum = spec
         self.spectrumrms = dspec
