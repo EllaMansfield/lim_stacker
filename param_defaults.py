@@ -104,3 +104,6 @@ cosmogrid False
 
 """ adaptive photometry """
 adaptivephotometry False
+
+""" prf_fitting"""
+prf_fitting False

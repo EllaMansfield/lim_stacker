@@ -64,6 +64,7 @@ class cubelet():
         # housekeeping info
         self.unit = 'K'  # params.plotunits ***** this is terrible
         self.adaptivephotometry = params.adaptivephotometry
+        self.prf_fitting = params.prf_fitting
         self.ncutouts = 1
         self.catidx = [cutout.catidx]
         self.nuobs_mean = [cutout.freq]
@@ -133,6 +134,7 @@ class cubelet():
         # params info
         self.unit = params.plotunits
         self.adaptivephotometry = params.adaptivephotometry
+        self.prf_fitting = params.prf_fitting
 
         # read in aperture/cubelet sizes
         self.xwidth = params.xwidth
@@ -238,6 +240,7 @@ class cubelet():
             self.spectrum = [spec, dspec]
         
         if self.prf_fitting:
+            print('Using PRF FITTING METHOD')
             #this is just much the adaptive_photometry implementation repeated for prf_fitting
             try:
                 oldspec = self.spectrum
@@ -251,7 +254,7 @@ class cubelet():
 
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum = [spec, dspec]
-            
+
         # housekeeping
         self.catidx.append(cutout.catidx)
         nuobs_mean = (self.nuobs_mean * self.ncutouts + cutout.freq) / (self.ncutouts + 1)
@@ -326,6 +329,22 @@ class cubelet():
 
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum, self.spectrumrms = spec, dspec
+
+        if self.prf_fitting:
+            print('Using PRF FITTING METHOD')
+            #this is just much the adaptive_photometry implementation repeated for prf_fitting
+            try:
+                oldspec = self.spectrum
+                olddspec = self.spectrumrms
+            except AttributeError:
+
+                oldspec, olddspec = self.get_spectrum(method='prf_fitting', params=params)
+
+            # get PRF spectrum
+            newspec, newdspec = cubelet.get_spectrum(method='prf_fitting', params=params)
+
+            spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
+            self.spectrum = [spec, dspec]
 
         del (cubelet)
         return
@@ -488,8 +507,6 @@ class cubelet():
         return beammodel
 
     def get_spectrum(self, in_place=False, method='weightmean', params=None):
-
-
         if method == 'weightmean' or method == 'summed':
             apspec = self.cube[:, self.apminpix[1]:self.apmaxpix[1], self.apminpix[2]:self.apmaxpix[2]]
             dapspec = self.cuberms[:, self.apminpix[1]:self.apmaxpix[1], self.apminpix[2]:self.apmaxpix[2]]
@@ -550,8 +567,6 @@ class cubelet():
                 spec = np.array(photflux)
                 dspec = np.array(photrms)
         elif method == "prf_fitting":
-            # My (Ella's) Code
-            # if params.prf_fitting == True:
                 
             # I grabbed this from other code in stack.py
             # actual COMAP beam
@@ -559,16 +574,27 @@ class cubelet():
             sigma_x = beam_fwhm / (2 * np.sqrt(2 * np.log(2)))
             sigma_y = sigma_x
 
+            # get center values (copied from adaptive photometry)
+            # initparams = QTable()
+            # initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
+            # initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
+
+            x = self.centpix[1] - 0.5 + self.xpixcent
+            y = self.centpix[2] - 0.5 + self.ypixcent
+
+            noise_array = np.array(self)
             # placeholder spectral standard deviation
-            amp, pcov = fit_amplitude(self.x, self.y, self.z, sigma_x, sigma_y, spatstd=None, specstd=1,
-                                    xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=self)
-            PRF_fit = Gaussian3DPRF(xcent=self.x, ycent=self.y, speccent=self.z, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
+            amp, pcov = fit_amplitude(x, y, self.z_mean, sigma_x, sigma_y, spatstd=None, specstd=1,
+                                    xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=noise_array)
+            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.z_mean, xstd=sigma_x, ystd=sigma_y, spatstd=None, specstd=1,
                                     xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
             
             # Currently placeholders just to see if it runs.
             spec = np.ones(self.cube.shape[0])
             dspec = np.ones(self.cube.shape[0])
 
+            # *** Add a conditional here to not include the spectrum/do something else
+            # if value is not within RMS error? ***
         self.spectrum = spec
         self.spectrumrms = dspec
 
@@ -1372,7 +1398,6 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
     wrapper to stack up a single field, using the cubelet object
     assumes comap is already in the desired units
     """
-
     # set up for rotating each cutout randomly if that's set to happen
     if params.rotate:
         params.rng = np.random.default_rng(params.rotseed)
@@ -1414,6 +1439,8 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
                 if stackinst_new.unit != 'linelum':
                     stackinst_new.to_linelum(params)
                 stackinst.stackin_cubelet(stackinst_new, params, weights=weight)  # Added 'params' here
+                # tests
+                print('field_stack calls stackin_cubelet')
 
             if goalnobj:
                 field_nobj += 1     
