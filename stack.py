@@ -332,19 +332,16 @@ class cubelet():
 
         if self.prf_fitting:
             print('Using PRF FITTING METHOD')
-            #this is just much the adaptive_photometry implementation repeated for prf_fitting
+            #this is just the adaptive_photometry implementation repeated for prf_fitting
             try:
                 oldspec = self.spectrum
                 olddspec = self.spectrumrms
             except AttributeError:
-
                 oldspec, olddspec = self.get_spectrum(method='prf_fitting', params=params)
-
             # get PRF spectrum
             newspec, newdspec = cubelet.get_spectrum(method='prf_fitting', params=params)
-
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
-            self.spectrum = [spec, dspec]
+            self.spectrum, self.spectrumrms = spec, dspec
 
         del (cubelet)
         return
@@ -575,39 +572,40 @@ class cubelet():
             sigma_y = sigma_x
 
             # get center values (copied from adaptive photometry)
-            # initparams = QTable()
-            # initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
-            # initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
-
             x = self.centpix[1] - 0.5 + self.xpixcent
-            
             y = self.centpix[2] - 0.5 + self.ypixcent
 
-            # noise_array = self.cube.value
-            # noise_array = np.array(noise_array)
-            # print(noise_array)
-            # placeholder spectral standard deviation
-            print(x)
-            print(y)
-            print(self.z_mean)
-            print(sigma_x)
-            print(sigma_y)
-            print(params.xwidth)
-            print(params.ywidth)
-            print(params.freqwidth)
+            # get central spectral value (nuobs_mean is still just the center when get_spectrum is called)
+            print(self.nuobs_mean)
+            specpixcent = 0.5
+            speccent = self.nuobs_mean[0] - 0.5 + specpixcent
+            
+            #swap axes so fit_amplitude fits things correctly (it uses x, y, freq)
+            noise_array = self.cube # [freq, x, y]
+            noise_array = np.swapaxes(noise_array, 0, 2) # [y, x, freq]
+            noise_array = np.swapaxes(noise_array, 0, 1) # [x, y, freq]
 
-            noise_array = self.cube
-            amp, pcov = fit_amplitude(x, y, self.z_mean, sigma_x.value, sigma_y.value, spatstd=None, specstd=1,
-                                    xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, noise_array=noise_array)
-            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.z_mean, xstd=sigma_x.value, ystd=sigma_y.value, spatstd=None, specstd=1,
-                                    xsize=params.xwidth, ysize=params.ywidth, specsize=params.freqwidth, total_flux=amp, plots=False)
+            # let numpy sort out the infinities and nans with small, 0s, and large numbers
+            noise_array = np.nan_to_num(noise_array)
+
+            # currently has a placeholder spectral standard deviation
+            amp, pcov = fit_amplitude(x, y, self.nuobs_mean, sigma_x.value, sigma_y.value, spatstd=None, specstd=1,
+                                    xsize=self.cubexwidth, ysize=self.cubeywidth, specsize=self.cubefreqwidth, noise_array=noise_array)
+            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.nuobs_mean, xstd=sigma_x.value, ystd=sigma_y.value, spatstd=None, specstd=1,
+                                    xsize=self.cubexwidth, ysize=self.cubeywidth, specsize=self.cubefreqwidth, total_flux=amp, plots=False)
+            
+            # swap PRF_fit from [x, y, freq] back to [freq, x, y] for later use
+            PRF_fit = np.swapaxes(PRF_fit, 0, 2) # [freq, y, x]
+            PRF_fit = np.swapaxes(PRF_fit, 1, 2) # [freq, x, y]
             
             # Currently placeholders just to see if it runs.
+            #spec = PRF_fit[:,16,16]
             spec = np.ones(self.cube.shape[0])
-            dspec = np.ones(self.cube.shape[0])
+            dspec = np.ones(self.cube.shape[0]) #placeholder
 
             # *** Add a conditional here to not include the spectrum/do something else
             # if value is not within RMS error? ***
+
         self.spectrum = spec
         self.spectrumrms = dspec
 
@@ -825,6 +823,9 @@ class cubelet():
                 if params.adaptivephotometry:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
+                if params.prf_fitting:
+                    im, dim = self.get_image()
+                    spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -846,6 +847,9 @@ class cubelet():
                 if params.adaptivephotometry:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
+                if params.prf_fitting:
+                    im, dim = self.get_image()
+                    spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -1452,8 +1456,6 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
                 if stackinst_new.unit != 'linelum':
                     stackinst_new.to_linelum(params)
                 stackinst.stackin_cubelet(stackinst_new, params, weights=weight)  # Added 'params' here
-                # tests
-                print('field_stack calls stackin_cubelet')
 
             if goalnobj:
                 field_nobj += 1     
