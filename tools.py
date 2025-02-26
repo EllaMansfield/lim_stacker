@@ -1781,7 +1781,7 @@ def weightmean(vals, rmss, axis=None, weights=None):
         weights = weights / rmss**2 # *** probably going to have to worry about the shape of the weights array
     else:
         weights = 1/rmss**2
-
+        
     meanval = np.nansum(vals*weights, axis=axis) / np.nansum(1*weights, axis=axis)
     meanrms = np.sqrt(1/np.nansum(1*weights, axis=axis))
 

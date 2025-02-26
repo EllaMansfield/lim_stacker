@@ -326,7 +326,7 @@ class cubelet():
                 self.spectrum, self.spectrumrms = oldspec, olddspec
             # get the new adaptive spectrum
             newspec, newdspec = cubelet.get_spectrum(method='adaptive_photometry', params=params)
-
+            
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum, self.spectrumrms = spec, dspec
 
@@ -340,6 +340,9 @@ class cubelet():
                 oldspec, olddspec = self.get_spectrum(method='prf_fitting', params=params)
             # get PRF spectrum
             newspec, newdspec = cubelet.get_spectrum(method='prf_fitting', params=params)
+            
+            #avg it in
+            # for some reason, the stack has a third axis
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum, self.spectrumrms = spec, dspec
 
@@ -570,13 +573,14 @@ class cubelet():
             beam_fwhm = 4.5 * u.arcmin
             sigma_x = beam_fwhm / (2 * np.sqrt(2 * np.log(2)))
             sigma_y = sigma_x
-
+            # placeholder spectral std for now
+            specstd=1
             # get center values (copied from adaptive photometry)
             x = self.centpix[1] - 0.5 + self.xpixcent
             y = self.centpix[2] - 0.5 + self.ypixcent
 
             # get central spectral value (nuobs_mean is still just the center when get_spectrum is called)
-            print(self.nuobs_mean)
+            # currently not used anywhere
             specpixcent = 0.5
             speccent = self.nuobs_mean[0] - 0.5 + specpixcent
             
@@ -589,22 +593,59 @@ class cubelet():
             noise_array = np.nan_to_num(noise_array)
 
             # currently has a placeholder spectral standard deviation
-            amp, pcov = fit_amplitude(x, y, self.nuobs_mean, sigma_x.value, sigma_y.value, spatstd=None, specstd=1,
+            amp, pcov = fit_amplitude(x, y, self.nuobs_mean, sigma_x.value, sigma_y.value, spatstd=None, specstd=specstd,
                                     xsize=self.cubexwidth, ysize=self.cubeywidth, specsize=self.cubefreqwidth, noise_array=noise_array)
-            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.nuobs_mean, xstd=sigma_x.value, ystd=sigma_y.value, spatstd=None, specstd=1,
+            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.nuobs_mean, xstd=sigma_x.value, ystd=sigma_y.value, spatstd=None, specstd=specstd,
                                     xsize=self.cubexwidth, ysize=self.cubeywidth, specsize=self.cubefreqwidth, total_flux=amp, plots=False)
             
+            # unused, placeholder for when we check if the fit is good
+            max_cov = 1
+            if pcov > max_cov:
+                # do something to account for a bad fit
+                pass
+            else:
+                # do all the stuff (indent most of the stuff below)
+                pass
+
             # swap PRF_fit from [x, y, freq] back to [freq, x, y] for later use
             PRF_fit = np.swapaxes(PRF_fit, 0, 2) # [freq, y, x]
             PRF_fit = np.swapaxes(PRF_fit, 1, 2) # [freq, x, y]
             
-            # Currently placeholders just to see if it runs.
-            #spec = PRF_fit[:,16,16]
-            spec = np.ones(self.cube.shape[0])
-            dspec = np.ones(self.cube.shape[0]) #placeholder
+            # do photometry, but weighted based on model
+            def Gaussian1Derf(z, zcent, zstd, total_flux):
+                gauss1Derf = (total_flux / 2) * (sp.erf((z - zcent[0] + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent[0] - 0.5) / (np.sqrt(2) * zstd)))
+                return gauss1Derf
+        
+            try:
+                beammodel = self.beammodel
+            except AttributeError:
+                beammodel = self.beam_model(params)
 
-            # *** Add a conditional here to not include the spectrum/do something else
-            # if value is not within RMS error? ***
+            initparams = QTable()
+            initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
+            initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
+            psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
+
+            photflux = []
+            photrms = []
+            for i in range(self.cube.shape[0]):
+
+                    # check channel, if it's fully nan'd out then return a nan for this channel
+                    apspec = self.cube[i, self.apminpix[1]:self.apmaxpix[1],
+                            self.apminpix[2]:self.apmaxpix[2]]
+                    if len(np.where(np.isnan(apspec.flatten()))[0]) == len(apspec.flatten()):
+                        photflux.append(np.nan)
+                        photrms.append(np.nan)
+                        continue
+
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore')
+                        output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
+                        photflux.append(output['flux_fit'].value[0]*Gaussian1Derf(i, self.nuobs_mean, specstd, amp)[0]) # weight it
+                        photrms.append(output['flux_err'].value[0]) # unsure how to handle with weighting
+                        
+            spec = np.array(photflux)
+            dspec = np.array(photrms)
 
         self.spectrum = spec
         self.spectrumrms = dspec
@@ -661,11 +702,11 @@ class cubelet():
                 initparams['y'] = [self.centpix[1]]
             else:
                 # initiate photometry objects with adaptive centering
-                psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
                 initparams = QTable()
                 initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
                 initparams['y'] = [self.centpix[1] - 0.5 + self.ypixcent]
-
+                psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
+                
             photflux = []
             photrms = []
             for i in np.arange(self.apminpix[0], self.apmaxpix[0]):
@@ -2101,7 +2142,7 @@ def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, to
     return gaussarray
 
 def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
-                  ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None):
+                ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None):
     # only can put in spatstd alone or (xstd and ystd together). spatstd takes priority in all cases.
     # DO NOT specify spatstd if you do not want a circular gaussian
     if spatstd is not None:
