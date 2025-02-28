@@ -569,12 +569,16 @@ class cubelet():
         elif method == "prf_fitting":
                 
             # I grabbed this from other code in stack.py
-            # actual COMAP beam
-            beam_fwhm = 4.5 * u.arcmin
-            sigma_x = beam_fwhm / (2 * np.sqrt(2 * np.log(2)))
-            sigma_y = sigma_x
+
+            beamsigma = params.beamwidth / (2 * np.sqrt(2 * np.log(2)))
+            beamsigmapix = beamsigma / self.xstep
+
+            sigma_x =beamsigmapix
+            sigma_y = beamsigmapix
+            
             # placeholder spectral std for now
             specstd=1
+
             # get center values (copied from adaptive photometry)
             x = self.centpix[1] - 0.5 + self.xpixcent
             y = self.centpix[2] - 0.5 + self.ypixcent
@@ -593,10 +597,10 @@ class cubelet():
             noise_array = np.nan_to_num(noise_array)
 
             # currently has a placeholder spectral standard deviation
-            amp, pcov = fit_amplitude(x, y, self.nuobs_mean, sigma_x.value, sigma_y.value, spatstd=None, specstd=specstd,
-                                    xsize=self.cubexwidth, ysize=self.cubeywidth, specsize=self.cubefreqwidth, noise_array=noise_array)
-            PRF_fit = Gaussian3DPRF(xcent=x, ycent=y, speccent=self.nuobs_mean, xstd=sigma_x.value, ystd=sigma_y.value, spatstd=None, specstd=specstd,
-                                    xsize=self.cubexwidth, ysize=self.cubeywidth, specsize=self.cubefreqwidth, total_flux=amp, plots=False)
+            amp, pcov = fit_amplitude(x, y, self.nuobs_mean, sigma_x, sigma_y, None, specstd,
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, noise_array)
+            PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, specstd,
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp)
             
             # unused, placeholder for when we check if the fit is good
             max_cov = 1
@@ -643,7 +647,7 @@ class cubelet():
                         output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
                         photflux.append(output['flux_fit'].value[0]*Gaussian1Derf(i, self.nuobs_mean, specstd, amp)[0]) # weight it
                         photrms.append(output['flux_err'].value[0]) # unsure how to handle with weighting
-                        
+
             spec = np.array(photflux)
             dspec = np.array(photrms)
 
@@ -1181,7 +1185,7 @@ def single_cutout(idx, galcat, comap, params):
     """ can i make this prettier """
     # find gal in each axis, test to make sure it falls into field
     ## freq
-    zval = galcat.z[idx]
+    zval = galcat.z[idx] # freqidx = xidx
     nuobs = params.centfreq / (1 + zval)
     if nuobs < np.min(comap.freq) or nuobs > np.max(comap.freq + comap.fstep):
         return None
@@ -2123,7 +2127,7 @@ def observer_units(Tvals, rmsvals, zvals, nuobsvals, params):
 # My (Ella's) stuff begins here. This can be reorganized to fit the organiztion of stack,py later.
 
 def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
-                  plots=False):
+                plots=False):
     
     def Gaussian2Derf(x, y, xcent, ycent, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1):
         gauss2Derf = (total_flux / 4) * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf(
@@ -2138,19 +2142,19 @@ def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, to
         plt.imshow(gaussarray, cmap='gist_heat')
         plt.colorbar()
         plt.show()
+
     # Returns a 2D PRF array
     return gaussarray
 
-def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
+def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
                 ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None):
-    # only can put in spatstd alone or (xstd and ystd together). spatstd takes priority in all cases.
-    # DO NOT specify spatstd if you do not want a circular gaussian
+    
+    # DO NOT specify spatstd if you do not want a circular gaussian. It takes priority.
     if spatstd is not None:
         xstd = spatstd
         ystd = spatstd
 
-    # Makes the 2D profile with function above. I need to rename this function to be more specific.
-    # Putting flux = 1 should fix issues with double counting
+    # Makes the 2D profile
     spatial_array = Gaussian2DPRF(xcent, ycent, xstd, ystd, xsize, ysize, 1, plots=False)
 
     def Gaussian1Derf(z, zcent, zstd, total_flux):
@@ -2158,15 +2162,15 @@ def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spa
                 sp.erf((z - zcent + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent - 0.5) / (np.sqrt(2) * zstd)))
         return gauss1Derf
 
-    # make a 3D array with slices of spatial_array the amount of times of specsize
+    # make a 3D array with the 2D array duplicated in the new axis
     spatspec_cube = np.repeat(spatial_array[:, :, np.newaxis], specsize, axis=2)
 
     s = np.arange(0, specsize)
     specweight = Gaussian1Derf(s, speccent, specstd, total_flux)
 
-    # weight our cube/rectangular prism based on a gaussian defined by the parameters we input.
-    spatspec_cube = spatspec_cube * specweight  # multiplies. Idk if it works as intended though. I didn't test it except
-    # for the fact that it visually looks as it should
+    # weight cube/rectangular prism based on a gaussian defined by the parameters we input.
+    spatspec_cube = spatspec_cube * specweight
+
     if plots:
         if plot_interval is None:
             # plot_interval is how many pixels we deviate from the center. Must be an integer and not go out of bounds.
@@ -2210,21 +2214,23 @@ def Gaussian3DPRF(amp=1, xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spa
 
 
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
-                specsize=200, total_flux=1, noise_array=None):
+                specsize=200, noise_array=None):
+    
+    #spatstd takes priority and assigns to both xstd and ystd
+    if spatstd != None:
+        xstd = spatstd
+        ystd = spatstd
 
-    # The PRF function I fit to the noisy data. 
+    # The PRF functionfit to the noisy data. 
     def gauss3d_fitfunc(data, amp):
         x, y, spec = data
-
-        # total_flux is unneeded here (it's the same as the amplitude)
         return ((amp / 8)
                 * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
                 * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
                 * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
 
-    X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize))
+    X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize)) # currently has the y axis flipped I think
     coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
-    popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, noise_array.ravel(), p0=2, maxfev=2000) # , bounds=[0, float('inf')])
+    popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, noise_array.ravel(), p0=2, maxfev=2000) 
     # p0 amplitude will need to be changed depending on the scale of the actual data
-    # set bounds to be positive because it sometimes gave negative bounds. This fixed some of my non-negative issues and I am unsure why.
     return popt, pcov
