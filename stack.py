@@ -91,6 +91,7 @@ class cubelet():
 
         self.xpixcent = cutout.xpixcent
         self.ypixcent = cutout.ypixcent
+        self.freqpixcent = cutout.freqpixcent
 
         # find the width of the channel in GHz (different if physical spacing)
         # also the width of each pixel
@@ -240,7 +241,6 @@ class cubelet():
             self.spectrum = [spec, dspec]
         
         if self.prf_fitting:
-            print('Using PRF FITTING METHOD')
             #this is just much the adaptive_photometry implementation repeated for prf_fitting
             try:
                 oldspec = self.spectrum
@@ -568,38 +568,31 @@ class cubelet():
                 dspec = np.array(photrms)
         elif method == "prf_fitting":
                 
-            # I grabbed this from other code in stack.py
-
             beamsigma = params.beamwidth / (2 * np.sqrt(2 * np.log(2)))
             beamsigmapix = beamsigma / self.xstep
-
-            sigma_x =beamsigmapix
+            sigma_x = beamsigmapix
             sigma_y = beamsigmapix
             
-            # placeholder spectral std for now
-            specstd=1
-
+            # placeholder spectral std is 1
+            sigma_spec=1
+            
             # get center values (copied from adaptive photometry)
             x = self.centpix[1] - 0.5 + self.xpixcent
             y = self.centpix[2] - 0.5 + self.ypixcent
-
-            # get central spectral value (nuobs_mean is still just the center when get_spectrum is called)
-            # currently not used anywhere
-            specpixcent = 0.5
-            speccent = self.nuobs_mean[0] - 0.5 + specpixcent
+            # get central spectral value (unused)
+            speccent = self.nuobs_mean[0] - 0.5 + self.freqpixcent
             
-            #swap axes so fit_amplitude fits things correctly (it uses x, y, freq)
+            #swap axes so fit_amplitude fits things correctly 
             noise_array = self.cube # [freq, x, y]
             noise_array = np.swapaxes(noise_array, 0, 2) # [y, x, freq]
             noise_array = np.swapaxes(noise_array, 0, 1) # [x, y, freq]
 
-            # let numpy sort out the infinities and nans with small, 0s, and large numbers
+            # let numpy sort out nans and infinities, because curve_fit needs real numbers to work
             noise_array = np.nan_to_num(noise_array)
 
-            # currently has a placeholder spectral standard deviation
-            amp, pcov = fit_amplitude(x, y, self.nuobs_mean, sigma_x, sigma_y, None, specstd,
+            amp, pcov = fit_amplitude(x, y, speccent, sigma_x, sigma_y, None, sigma_spec,
                                     self.cubexwidth, self.cubeywidth, self.cubefreqwidth, noise_array)
-            PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, specstd,
+            PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, sigma_spec,
                                     self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp)
             
             # unused, placeholder for when we check if the fit is good
@@ -617,7 +610,7 @@ class cubelet():
             
             # do photometry, but weighted based on model
             def Gaussian1Derf(z, zcent, zstd, total_flux):
-                gauss1Derf = (total_flux / 2) * (sp.erf((z - zcent[0] + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent[0] - 0.5) / (np.sqrt(2) * zstd)))
+                gauss1Derf = (total_flux / 2) * (sp.erf((z - zcent + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent - 0.5) / (np.sqrt(2) * zstd)))
                 return gauss1Derf
         
             try:
@@ -645,7 +638,7 @@ class cubelet():
                     with warnings.catch_warnings():
                         warnings.simplefilter('ignore')
                         output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
-                        photflux.append(output['flux_fit'].value[0]*Gaussian1Derf(i, self.nuobs_mean, specstd, amp)[0]) # weight it
+                        photflux.append(output['flux_fit'].value[0]*Gaussian1Derf(i, speccent, sigma_spec, amp)[0]) # weight it
                         photrms.append(output['flux_err'].value[0]) # unsure how to handle with weighting
 
             spec = np.array(photflux)
@@ -1185,7 +1178,7 @@ def single_cutout(idx, galcat, comap, params):
     """ can i make this prettier """
     # find gal in each axis, test to make sure it falls into field
     ## freq
-    zval = galcat.z[idx] # freqidx = xidx
+    zval = galcat.z[idx]
     nuobs = params.centfreq / (1 + zval)
     if nuobs < np.min(comap.freq) or nuobs > np.max(comap.freq + comap.fstep):
         return None
@@ -1194,6 +1187,8 @@ def single_cutout(idx, galcat, comap, params):
         fdiff = -1
     else:
         fdiff = 1
+
+    freqpixcent = (nuobs - comap.freqbe[freqidx])/comap.fstep
 
     # if the map has been rescaled, these arrays will be 2d
     if len(comap.ra.shape) == 2:
@@ -1239,7 +1234,6 @@ def single_cutout(idx, galcat, comap, params):
         else:
             ydiff = 1
         ypixcent = (y - comap.decbe[yidx]) / comap.ystep
-
     # if the center voxel of the cutout is a nan, axe it
     if np.isnan(comap.map[freqidx, yidx, xidx]):
         return None
@@ -1260,6 +1254,7 @@ def single_cutout(idx, galcat, comap, params):
     cutout.fstep = comap.fstep
     cutout.xpixcent = xpixcent
     cutout.ypixcent = ypixcent
+    cutout.freqpixcent = freqpixcent
     cutout.fstep = comap.fstep
 
     # these things depend on cosmogrid 
@@ -2124,7 +2119,6 @@ def observer_units(Tvals, rmsvals, zvals, nuobsvals, params):
 
     return obsunitdict
 
-# My (Ella's) stuff begins here. This can be reorganized to fit the organiztion of stack,py later.
 
 def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
                 plots=False):
@@ -2143,7 +2137,6 @@ def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, to
         plt.colorbar()
         plt.show()
 
-    # Returns a 2D PRF array
     return gaussarray
 
 def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
@@ -2173,8 +2166,6 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
 
     if plots:
         if plot_interval is None:
-            # plot_interval is how many pixels we deviate from the center. Must be an integer and not go out of bounds.
-            # defaults to the standard deviation of the spectrum.
             plot_interval = specstd
 
         spatspec_front = spatspec_cube[:, :, int(speccent) - int(plot_interval)]
@@ -2215,13 +2206,11 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
 
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
                 specsize=200, noise_array=None):
-    
     #spatstd takes priority and assigns to both xstd and ystd
     if spatstd != None:
         xstd = spatstd
         ystd = spatstd
-
-    # The PRF functionfit to the noisy data. 
+    # The PRF function fit to the noisy data. 
     def gauss3d_fitfunc(data, amp):
         x, y, spec = data
         return ((amp / 8)
