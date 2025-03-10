@@ -331,7 +331,6 @@ class cubelet():
             self.spectrum, self.spectrumrms = spec, dspec
 
         if self.prf_fitting:
-            print('Using PRF FITTING METHOD')
             #this is just the adaptive_photometry implementation repeated for prf_fitting
             try:
                 oldspec = self.spectrum
@@ -580,7 +579,7 @@ class cubelet():
             x = self.centpix[1] - 0.5 + self.xpixcent
             y = self.centpix[2] - 0.5 + self.ypixcent
             # get central spectral value (unused)
-            speccent = self.nuobs_mean[0] - 0.5 + self.freqpixcent
+            speccent = self.centpix[0] - 0.5 + self.freqpixcent
             
             #swap axes so fit_amplitude fits things correctly 
             noise_array = self.cube # [freq, x, y]
