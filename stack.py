@@ -565,8 +565,8 @@ class cubelet():
 
                 spec = np.array(photflux)
                 dspec = np.array(photrms)
-        elif method == "prf_fitting":
-                
+        elif method == "prf_fitting":    
+            
             beamsigma = params.beamwidth / (2 * np.sqrt(2 * np.log(2)))
             beamsigmapix = beamsigma / self.xstep
             sigma_x = beamsigmapix
@@ -593,7 +593,29 @@ class cubelet():
                                     self.cubexwidth, self.cubeywidth, self.cubefreqwidth, noise_array)
             PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, sigma_spec,
                                     self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp)
+            rms = np.sqrt(pcov) #probably bad, but placeholder math. std deviation.
             
+            # check if an average has started
+            if not params.prf_stacklco:
+                params.prf_stacklco = float(amp)
+                params.prf_stacklcorms = float(rms)
+            else:
+                # get old values
+                oldlco = params.prf_stacklco
+                oldlco = np.array([oldlco])
+                oldlco_rms = params.prf_stacklcorms
+                oldlco_rms = np.array([oldlco_rms])
+                amp = np.array(amp)
+                rms = np.array([float(rms)])
+                
+                #stack with new relevant vals
+                lco_vals = np.stack((oldlco, amp), axis=0)
+                lco_rmsvals = np.stack((oldlco_rms, rms), axis=0)
+                newlco, new_lcorms = weightmean(lco_vals, lco_rmsvals)
+
+                #assign these values to be the new ones
+                params.prf_stacklco = newlco
+                params.prf_stacklcorms = new_lcorms
             # unused, placeholder for when we check if the fit is good
             max_cov = 1
             if pcov > max_cov:
@@ -602,7 +624,7 @@ class cubelet():
             else:
                 # do all the stuff (indent most of the stuff below)
                 pass
-
+            
             # swap PRF_fit from [x, y, freq] back to [freq, x, y] for later use
             PRF_fit = np.swapaxes(PRF_fit, 0, 2) # [freq, y, x]
             PRF_fit = np.swapaxes(PRF_fit, 1, 2) # [freq, x, y]
@@ -714,7 +736,10 @@ class cubelet():
 
             spec = np.array(photflux)
             dspec = np.array(photrms)
-
+        elif method == 'prf_fitting':
+            #skips the stuff after this statement. May need to change.
+            
+            return params.prf_stacklco, params.prf_stacklcorms
         else:
             print("Don't know that aperture extraction method")
 
@@ -799,9 +824,11 @@ class cubelet():
         return np.array(outvallist).flatten(), np.array(outdvallist).flatten()
 
 
-    def get_output_dict(self, in_place=False):
+    def get_output_dict(self, in_place=False, params=None):
         if self.adaptivephotometry:
-            llum, dllum = self.get_aperture(method='adaptive_photometry')  # made changes here
+            llum, dllum = self.get_aperture(method='adaptive_photometry', params=params)
+        elif self.prf_fitting:
+            llum, dllum = self.get_aperture(method='prf_fitting', params=params)
         else:
             llum, dllum = self.get_aperture()  # defaults to weightmean
         self.linelum = llum
@@ -897,7 +924,7 @@ class cubelet():
                 except AttributeError:
                     comment = ['Multi-field stack']
 
-        outdict = self.get_output_dict()
+        outdict = self.get_output_dict(params=params)
 
         combined_plotter(self, params, stackim=im, stackrms=dim,
                         stackspec=spec, cmap='PiYG_r',
@@ -914,7 +941,7 @@ class cubelet():
         ovalfile = params.datasavepath + fieldstr + '/output_values.csv'
         # strip the values of their units before saving them (otherwise really annoying
         # to read out on the other end)
-        outdict = self.get_output_dict()
+        outdict = self.get_output_dict(params=params)
         outputvals_nu = dict_saver(outdict, ovalfile)
 
         idxfile = params.datasavepath + fieldstr + '/included_cat_indices.npz'
@@ -1454,6 +1481,10 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
     wrapper to stack up a single field, using the cubelet object
     assumes comap is already in the desired units
     """
+    # default values for prf_fitting running luminosity value (these get overwritten)
+    params.prf_stacklco = 0
+    params.prf_stacklcorms = 0
+
     # set up for rotating each cutout randomly if that's set to happen
     if params.rotate:
         params.rng = np.random.default_rng(params.rotseed)
@@ -1494,7 +1525,7 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
                 stackinst_new = cubelet(cutout, params)
                 if stackinst_new.unit != 'linelum':
                     stackinst_new.to_linelum(params)
-                stackinst.stackin_cubelet(stackinst_new, params, weights=weight)  # Added 'params' here
+                stackinst.stackin_cubelet(stackinst_new, params, weights=weight)
 
             if goalnobj:
                 field_nobj += 1     

@@ -107,3 +107,8 @@ adaptivephotometry False
 
 """ prf_fitting"""
 prf_fitting False
+
+'''
+""" prf_stacklco"""
+prf_stacklco 0'
+'''
