@@ -29,6 +29,7 @@ from astropy.table import QTable
 # for fitting gaussian 3D PRF extraction
 from scipy import special as sp
 from scipy.optimize import curve_fit
+from scipy.optimize import least_squares
 
 # ignore warnings:
 # divide by zero
@@ -586,14 +587,24 @@ class cubelet():
             noise_array = np.swapaxes(noise_array, 0, 2) # [y, x, freq]
             noise_array = np.swapaxes(noise_array, 0, 1) # [x, y, freq]
 
+            rms_array = self.cuberms # [freq, x, y]
+            rms_array = np.swapaxes(rms_array, 0, 2) # [y, x, freq]
+            rms_array = np.swapaxes(rms_array, 0, 1) # [x, y, freq]
+
             # let numpy sort out nans and infinities, because curve_fit needs real numbers to work
             noise_array = np.nan_to_num(noise_array)
+            rms_array = np.nan_to_num(rms_array)
+            
+            # deal with zeros in sigma
+            # rms_array += 10**-20
+            # print(rms_array)
 
+            # fitting method arg for testing purposes. currently no way to assign method externally
             amp, pcov = fit_amplitude(x, y, speccent, sigma_x, sigma_y, None, sigma_spec,
-                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, noise_array)
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, noise_array, rms_array, method='curve_fit')
             PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, sigma_spec,
                                     self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp)
-            rms = np.sqrt(pcov) #probably bad, but placeholder math. std deviation.
+            rms = np.sqrt(np.diag(pcov))
             
             # check if an average has started
             if not params.prf_stacklco:
@@ -2224,8 +2235,6 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
 
         fig.suptitle('Snapshots of spectral axis \n std dev: ' + str(specstd) + '\n Interval: ' + str(
             plot_interval) + '\n center: z=' + str(speccent))
-        # fig.colorbar(xsection0, ax=axs[0])
-        # fig.colorbar(xsection1, ax=axs[1])
         fig.colorbar(xsection2, ax=axs[2])
 
         plt.tight_layout()
@@ -2233,23 +2242,59 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
 
     return spatspec_cube
 
-
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
-                specsize=200, noise_array=None):
+                specsize=200, noise_array=None, rms_array=None, method='curve_fit'):
     #spatstd takes priority and assigns to both xstd and ystd
     if spatstd != None:
         xstd = spatstd
         ystd = spatstd
-    # The PRF function fit to the noisy data. 
-    def gauss3d_fitfunc(data, amp):
-        x, y, spec = data
-        return ((amp / 8)
+    
+    if method == 'least_squares':
+        def gauss3D_fitfunc(data):
+            x, y, spec = data
+            func = ((1 / 8)
                 * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
                 * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
                 * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
+            return func
+        
+        # define a gaussian function normalized to 1 with the specified centers and stds for our cubelet size
+        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize))
+        coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
+        func = gauss3D_fitfunc(coorddata)
+        
+        def residuals(param, noise_array):
+            prediction = param*func
+            residuals = (noise_array - prediction) # /rms_array)
+            return residuals
+        
+        
+        soln = least_squares(residuals, 20**8, args=(noise_array.ravel(), )) #, rms_array.ravel()
+        popt = soln.x
 
-    X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize)) # currently has the y axis flipped I think
-    coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
-    popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, noise_array.ravel(), p0=2, maxfev=2000) 
-    # p0 amplitude will need to be changed depending on the scale of the actual data
-    return popt, pcov
+        # I took this directly from stackexchange and I think it might be wrong
+        U, s, Vh = np.linalg.svd(soln.jac, full_matrices=False)
+        tol = np.finfo(float).eps*s[0]*max(soln.jac.shape)
+        w = s > tol
+        pcov = (Vh[w].T/s[w]**2) @ Vh[w]
+
+        return popt, pcov
+    
+    elif method =='curve_fit':
+        # The PRF function fit to the noisy data. 
+        def gauss3d_fitfunc(data, amp):
+            x, y, spec = data
+            func = ((1 / 8)
+                * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+                * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+                * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
+            return amp * func
+    
+        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize)) # currently has the y axis flipped I think
+        coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
+
+        popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, noise_array.ravel(), p0=3*10**8, sigma = None, maxfev=2000) #rms_array.ravel
+        return popt, pcov
+    else:
+        print('Not a valid amplitude fitting method :(')
+
