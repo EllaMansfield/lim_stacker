@@ -65,7 +65,11 @@ class cubelet():
         # housekeeping info
         self.unit = 'K'  # params.plotunits ***** this is terrible
         self.adaptivephotometry = params.adaptivephotometry
+        
         self.prf_fitting = params.prf_fitting
+        self.optcut = params.optcut
+        self.prf_fitmethod = params.prf_fitmethod
+
         self.ncutouts = 1
         self.catidx = [cutout.catidx]
         self.nuobs_mean = [cutout.freq]
@@ -136,7 +140,10 @@ class cubelet():
         # params info
         self.unit = params.plotunits
         self.adaptivephotometry = params.adaptivephotometry
+
         self.prf_fitting = params.prf_fitting
+        self.optcut = params.optcut
+        self.prf_fitmethod = params.prf_fitmethod
 
         # read in aperture/cubelet sizes
         self.xwidth = params.xwidth
@@ -574,7 +581,8 @@ class cubelet():
             sigma_y = beamsigmapix
             
             # placeholder spectral std is 1
-            sigma_spec=1
+            # 6 = 3 channels, if 40 channels in ~80 pixels = 1 channel for 2 pixels
+            sigma_spec=3
             
             # get center values (copied from adaptive photometry)
             x = self.centpix[1] - 0.5 + self.xpixcent
@@ -583,16 +591,16 @@ class cubelet():
             speccent = self.centpix[0] - 0.5 + self.freqpixcent
             
             #swap axes so fit_amplitude fits things correctly 
-            noise_array = self.cube # [freq, x, y]
-            noise_array = np.swapaxes(noise_array, 0, 2) # [y, x, freq]
-            noise_array = np.swapaxes(noise_array, 0, 1) # [x, y, freq]
+            cutout_forfit = self.cube # [freq, x, y]
+            cutout_forfit = np.swapaxes(cutout_forfit, 0, 2) # [y, x, freq]
+            cutout_forfit = np.swapaxes(cutout_forfit, 0, 1) # [x, y, freq]
 
             rms_array = self.cuberms # [freq, x, y]
             rms_array = np.swapaxes(rms_array, 0, 2) # [y, x, freq]
             rms_array = np.swapaxes(rms_array, 0, 1) # [x, y, freq]
 
             # let numpy sort out nans and infinities, because curve_fit needs real numbers to work
-            noise_array = np.nan_to_num(noise_array)
+            cutout_forfit = np.nan_to_num(cutout_forfit)
             rms_array = np.nan_to_num(rms_array)
             
             # deal with zeros in sigma
@@ -601,7 +609,7 @@ class cubelet():
 
             # fitting method arg for testing purposes. currently no way to assign method externally
             amp, pcov = fit_amplitude(x, y, speccent, sigma_x, sigma_y, None, sigma_spec,
-                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, noise_array, rms_array, method='curve_fit')
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, cutout_forfit, rms_array, method=self.prf_fitmethod, optcut = params.optcut)
             PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, sigma_spec,
                                     self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp)
             rms = np.sqrt(np.diag(pcov))
@@ -619,12 +627,12 @@ class cubelet():
                 amp = np.array(amp)
                 rms = np.array([float(rms)])
                 
-                #stack with new relevant vals
+                # stack with new relevant vals
                 lco_vals = np.stack((oldlco, amp), axis=0)
                 lco_rmsvals = np.stack((oldlco_rms, rms), axis=0)
                 newlco, new_lcorms = weightmean(lco_vals, lco_rmsvals)
 
-                #assign these values to be the new ones
+                # assign these values to be the new ones
                 params.prf_stacklco = newlco
                 params.prf_stacklcorms = new_lcorms
             # unused, placeholder for when we check if the fit is good
@@ -641,10 +649,7 @@ class cubelet():
             PRF_fit = np.swapaxes(PRF_fit, 1, 2) # [freq, x, y]
             
             # do photometry, but weighted based on model
-            def Gaussian1Derf(z, zcent, zstd, total_flux):
-                gauss1Derf = (total_flux / 2) * (sp.erf((z - zcent + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent - 0.5) / (np.sqrt(2) * zstd)))
-                return gauss1Derf
-        
+
             try:
                 beammodel = self.beammodel
             except AttributeError:
@@ -670,7 +675,7 @@ class cubelet():
                     with warnings.catch_warnings():
                         warnings.simplefilter('ignore')
                         output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
-                        photflux.append(output['flux_fit'].value[0]*Gaussian1Derf(i, speccent, sigma_spec, amp)[0]) # weight it
+                        photflux.append(output['flux_fit'].value[0]*Gaussian1DPRF(i, speccent, sigma_spec, amp)[0]) # weight it
                         photrms.append(output['flux_err'].value[0]) # unsure how to handle with weighting
 
             spec = np.array(photflux)
@@ -900,7 +905,10 @@ class cubelet():
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
                 if params.prf_fitting:
                     im, dim = self.get_image()
-                    spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
+                    # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
+                    ### MAKE IT GET THE GAUSSIAN1D PRF SPECTRUM ###
+                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, 3, params.prf_stacklco)
+                    print(spec)
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -923,8 +931,13 @@ class cubelet():
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
                 if params.prf_fitting:
+                    print('we are using the right section of code')
                     im, dim = self.get_image()
-                    spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
+                    # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
+                    ### MAKE IT GET THE GAUSSIAN1D PRF SPECTRUM ###
+                        # hard coded the std as 3 now, but should make changeable
+                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), 0, 3, params.prf_stacklco)
+                    print(spec)
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -1495,6 +1508,10 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
     # default values for prf_fitting running luminosity value (these get overwritten)
     params.prf_stacklco = 0
     params.prf_stacklcorms = 0
+
+    # default values for optpimization cutting. Default is an entire 81 pixel spectrum.
+    if not params.optcut:
+        params.optcut = 40
 
     # set up for rotating each cutout randomly if that's set to happen
     if params.rotate:
@@ -2160,6 +2177,9 @@ def observer_units(Tvals, rmsvals, zvals, nuobsvals, params):
 
     return obsunitdict
 
+def Gaussian1DPRF(x, xcent=0, xstd=5, total_flux=1):
+    gauss1Derf = (total_flux / 2) * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+    return gauss1Derf
 
 def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
                 plots=False):
@@ -2191,16 +2211,11 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     # Makes the 2D profile
     spatial_array = Gaussian2DPRF(xcent, ycent, xstd, ystd, xsize, ysize, 1, plots=False)
 
-    def Gaussian1Derf(z, zcent, zstd, total_flux):
-        gauss1Derf = (total_flux / 2) * (
-                sp.erf((z - zcent + 0.5) / (np.sqrt(2) * zstd)) - sp.erf((z - zcent - 0.5) / (np.sqrt(2) * zstd)))
-        return gauss1Derf
-
     # make a 3D array with the 2D array duplicated in the new axis
     spatspec_cube = np.repeat(spatial_array[:, :, np.newaxis], specsize, axis=2)
 
     s = np.arange(0, specsize)
-    specweight = Gaussian1Derf(s, speccent, specstd, total_flux)
+    specweight = Gaussian1DPRF(s, speccent, specstd, total_flux)
 
     # weight cube/rectangular prism based on a gaussian defined by the parameters we input.
     spatspec_cube = spatspec_cube * specweight
@@ -2243,7 +2258,21 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     return spatspec_cube
 
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
-                specsize=200, noise_array=None, rms_array=None, method='curve_fit'):
+                specsize=200, cutout_forfit=None, rms_array=None, method='curve_fit', optcut = 40):
+    
+    #cut down cube for optimized fitting based on optcut. Optcut is a value <1 representing the fraction of
+    # cube being fit (in spectral axis)
+    
+    # assumes always odd length for centering
+    center = (specsize // 2)
+    speccut_min = center - optcut
+    speccut_max = center + optcut
+
+
+    # don't change the actual cutout, so cut_cutout_forfit is the thing we actually get the amplitude from, 
+    # which is handeled then in get_spectrum()
+    cut_cutout_forfit = cutout_forfit[:,:, speccut_min:speccut_max+1] # will concatenate wrong right now
+    print(cut_cutout_forfit.shape)
     #spatstd takes priority and assigns to both xstd and ystd
     if spatstd != None:
         xstd = spatstd
@@ -2259,17 +2288,16 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
             return func
         
         # define a gaussian function normalized to 1 with the specified centers and stds for our cubelet size
-        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize))
+        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, int(optcut*2 + 1)))
         coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
         func = gauss3D_fitfunc(coorddata)
         
-        def residuals(param, noise_array):
+        def residuals(param, cut_cutout_forfit):
             prediction = param*func
-            residuals = (noise_array - prediction) # /rms_array)
+            residuals = (cut_cutout_forfit - prediction) # /rms_array)
             return residuals
         
-        
-        soln = least_squares(residuals, 20**8, args=(noise_array.ravel(), )) #, rms_array.ravel()
+        soln = least_squares(residuals, 20**8, args=(cut_cutout_forfit.ravel(), )) #, rms_array.ravel()
         popt = soln.x
 
         # I took this directly from stackexchange and I think it might be wrong
@@ -2285,15 +2313,16 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
         def gauss3d_fitfunc(data, amp):
             x, y, spec = data
             func = ((1 / 8)
+                    
                 * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
                 * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
                 * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
             return amp * func
     
-        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize)) # currently has the y axis flipped I think
+        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, int(optcut*2 + 1))) # currently has the y axis flipped I think
         coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
 
-        popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, noise_array.ravel(), p0=3*10**8, sigma = None, maxfev=2000) #rms_array.ravel
+        popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, cut_cutout_forfit.ravel(), p0=3*10**8, sigma = None, maxfev=2000) #rms_array.ravel
         return popt, pcov
     else:
         print('Not a valid amplitude fitting method :(')
