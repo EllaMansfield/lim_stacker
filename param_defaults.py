@@ -108,7 +108,12 @@ adaptivephotometry False
 """ prf_fitting"""
 prf_fitting False
 
-'''
-""" prf_stacklco"""
-prf_stacklco 0'
-'''
+# these 3 may not actually be defaulted in stack.py as of now
+# start with zero Lco to average
+prf_stacklco 0
+
+# number of pixels on either side of central pixel for optimized fitting
+optcut 40
+
+# method used for fitting amplitude
+prf_fitmethod 'curve_fit'

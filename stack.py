@@ -580,8 +580,6 @@ class cubelet():
             sigma_x = beamsigmapix
             sigma_y = beamsigmapix
             
-            # placeholder spectral std is 1
-            # 6 = 3 channels, if 40 channels in ~80 pixels = 1 channel for 2 pixels
             sigma_spec=3
             
             # get center values (copied from adaptive photometry)
@@ -626,6 +624,8 @@ class cubelet():
                 oldlco_rms = np.array([oldlco_rms])
                 amp = np.array(amp)
                 rms = np.array([float(rms)])
+
+                # put to self ***************
                 
                 # stack with new relevant vals
                 lco_vals = np.stack((oldlco, amp), axis=0)
@@ -906,9 +906,11 @@ class cubelet():
                 if params.prf_fitting:
                     im, dim = self.get_image()
                     # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
-                    ### MAKE IT GET THE GAUSSIAN1D PRF SPECTRUM ###
+
+                    # Display 1D prf with average L'co value
+                    # hard coded value to 3
+                    # print('PRF SPECTRUM IN COMBINEDPLOTTER')
                     spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, 3, params.prf_stacklco)
-                    print(spec)
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -931,13 +933,13 @@ class cubelet():
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
                 if params.prf_fitting:
-                    print('we are using the right section of code')
+                    print('PRF SPECTRUM IN COMBINEDPLOTTER')
                     im, dim = self.get_image()
                     # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
-                    ### MAKE IT GET THE GAUSSIAN1D PRF SPECTRUM ###
-                        # hard coded the std as 3 now, but should make changeable
+
+                    # Display 1D prf with average L'co value
+                    # hard coded the std as 3 now, but should make changeable
                     spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), 0, 3, params.prf_stacklco)
-                    print(spec)
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -1595,6 +1597,7 @@ def field_stack_queued(comap, galcat, params, field, queue):
     
     
 def parallel_field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
+    print('starting parallel stack')
     """
     same as field_stack, but will parallelize the catalog objects
     called if params.parallelize is True
@@ -1623,11 +1626,12 @@ def parallel_field_stack(comap, galcat, params, field=None, goalnobj=None, weigh
         pcatinst = galcat.subset(tidx, in_place=False)
 
         processes.append(Process(target=field_stack_queued, args=(comap, pcatinst, params, field, qout)))
-
+        
     # run processes
     for p in processes:
         p.start()
-    cubelist = [qout.get() for p in processes]
+        print('started a process')
+        cubelist = [qout.get() for p in processes]
     for p in processes:
         p.join()
 
@@ -2260,8 +2264,7 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
                 specsize=200, cutout_forfit=None, rms_array=None, method='curve_fit', optcut = 40):
     
-    #cut down cube for optimized fitting based on optcut. Optcut is a value <1 representing the fraction of
-    # cube being fit (in spectral axis)
+    #cut down cube for optimized fitting based on optcut.
     
     # assumes always odd length for centering
     center = (specsize // 2)
@@ -2272,7 +2275,6 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     # don't change the actual cutout, so cut_cutout_forfit is the thing we actually get the amplitude from, 
     # which is handeled then in get_spectrum()
     cut_cutout_forfit = cutout_forfit[:,:, speccut_min:speccut_max+1] # will concatenate wrong right now
-    print(cut_cutout_forfit.shape)
     #spatstd takes priority and assigns to both xstd and ystd
     if spatstd != None:
         xstd = spatstd
