@@ -410,7 +410,7 @@ class catalogue():
                     self.z = inputdict.pop('redshift')
                 except:
                     warnings.warn('No redshift in input catalogue', RuntimeWarning)
-
+            
             # coordinates
             try:
                 # fix skycoords wrapping thing around zero by just adding 3 deg to all ra coordinates if this is a simulation
