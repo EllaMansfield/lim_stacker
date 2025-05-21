@@ -284,7 +284,7 @@ class cubelet():
         if not cubelet:
             del (cubelet)
             return
-
+        
         # stack together the 3d cubelets
         cubevals = np.stack((self.cube, cubelet.cube))
         rmsvals = np.stack((self.cuberms, cubelet.cuberms))
