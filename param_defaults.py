@@ -119,4 +119,4 @@ prf_stacklco 0
 optcut 40
 
 # method used for fitting amplitude
-prf_fitmethod 'curve_fit'
+prf_fitmethod curve_fit

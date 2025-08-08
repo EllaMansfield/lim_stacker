@@ -673,7 +673,7 @@ class cubelet():
 
         
             x = np.arange(self.cubexwidth)
-            spec = Gaussian1DPRF(x, speccent, sigma_spec, amp)[0]
+            spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
             dspec = 10000000 #(placeholder)
             self.spectrum = spec
             self.spectrumrms = dspec
