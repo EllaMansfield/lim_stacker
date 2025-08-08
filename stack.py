@@ -24,7 +24,8 @@ from radio_beam import Beam
 from reproject import reproject_adaptive
 
 # for photometric aperture extraction
-from photutils.psf import IntegratedGaussianPRF, PSFPhotometry
+from photutils.psf import PSFPhotometry, CircularGaussianSigmaPRF
+IntegratedGaussianPRF = CircularGaussianSigmaPRF
 from astropy.table import QTable
 
 # for fitting gaussian 3D PRF extraction
@@ -590,7 +591,7 @@ class cubelet():
             sigma_x = beamsigmapix
             sigma_y = beamsigmapix
             
-            sigma_spec=3
+            sigma_spec = params.specwidth / (2 * np.sqrt(2 * np.log(2)))
             
             # get center values (copied from adaptive photometry)
             x = self.centpix[1] - 0.5 + self.xpixcent
@@ -904,7 +905,7 @@ class cubelet():
                     # Display 1D prf with average L'co value
                     # hard coded value to 3
                     amp = self.get_aperture(method = "prf_fitting", params=params)[0]
-                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, 3, amp)
+                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, params.specwidth/2.355, amp)
                     
                 else:
                     im, dim = self.get_image()
@@ -2349,7 +2350,7 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     nans = np.isnan(cut_cutout_forfit)
     cut_cutout_forfit = cut_cutout_forfit[~nans]
     #don't use rms_array yet. broken.
-    rms_array = rms_array[~nans]
+    #rms_array = rms_array[~nans]
     
     if method == 'least_squares':
         def gauss3D_fitfunc(data):
