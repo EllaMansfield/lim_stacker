@@ -597,7 +597,7 @@ class cubelet():
             x = self.centpix[1] - 0.5 + self.xpixcent
             y = self.centpix[2] - 0.5 + self.ypixcent
             # get central spectral value
-            speccent = self.centpix[0] - 0.5 + self.freqpixcent
+            speccent = self.centpix[0] + self.freqpixcent
             
             #swap axes so fit_amplitude fits things correctly 
             cutout_forfit = self.cube # [freq, x, y]
@@ -674,7 +674,7 @@ class cubelet():
         
             x = np.arange(self.cubexwidth)
             spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
-            dspec = 10000000 #(placeholder)
+            dspec = rms * np.ones(len(spec)) #(placeholder)
             self.spectrum = spec
             self.spectrumrms = dspec
 
