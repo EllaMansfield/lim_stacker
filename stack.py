@@ -876,7 +876,8 @@ class cubelet():
                 if params.adaptivephotometry:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
-                if params.prf_fitting:
+
+                elif params.prf_fitting:
                     im, dim = self.get_image()
                     # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
 
@@ -896,7 +897,7 @@ class cubelet():
                     else:
                         comment.append('Single-field stack')
                 except AttributeError:
-                    comment = ['Single-field stack']
+                    comment = ['Single-field stack']            
 
         else:
             if params.saveplots:
