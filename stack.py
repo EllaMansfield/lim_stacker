@@ -311,23 +311,6 @@ class cubelet():
         else:
             bigweights = None
 
-        self.cube, self.cuberms = weightmean(cubevals, rmsvals, axis=0, weights=bigweights)
-
-        # stack together the single values
-        self.linelum, self.dlinelum = weightmean(np.array((self.linelum, cubelet.linelum)),
-                                                np.array((self.dlinelum, cubelet.dlinelum)), weights=weights)
-        self.rhoh2, self.drhoh2 = weightmean(np.array((self.rhoh2, cubelet.rhoh2)),
-                                            np.array((self.drhoh2, cubelet.drhoh2)), weights=weights)
-
-        # housekeeping **** check averaging (also why is cubelet nuobs_mean a list?)
-        self.catidx = np.concatenate((self.catidx, cubelet.catidx))
-        nuobs_mean = (self.nuobs_mean * self.ncutouts + cubelet.nuobs_mean[0] * cubelet.ncutouts) / (
-                    self.ncutouts + cubelet.ncutouts)
-        self.nuobs_mean = nuobs_mean
-        z_mean = (self.z_mean * self.ncutouts + cubelet.z_mean[0] * cubelet.ncutouts) / (
-                    self.ncutouts + cubelet.ncutouts)
-        self.z_mean = z_mean
-        self.ncutouts = self.ncutouts + cubelet.ncutouts
 
         # if doing adaptive photometry, pull a centered spectrum from the new cubelet and average it in to the saved spectrum
         # *** weights not acocunted for in here
@@ -362,6 +345,25 @@ class cubelet():
             # merge lco lists
             self.prf_stacklco = np.concatenate((self.prf_stacklco, cubelet.prf_stacklco))
             self.prf_stacklcorms = np.concatenate((self.prf_stacklcorms, cubelet.prf_stacklcorms))
+
+
+        self.cube, self.cuberms = weightmean(cubevals, rmsvals, axis=0, weights=bigweights)
+
+        # stack together the single values
+        self.linelum, self.dlinelum = weightmean(np.array((self.linelum, cubelet.linelum)),
+                                                np.array((self.dlinelum, cubelet.dlinelum)), weights=weights)
+        self.rhoh2, self.drhoh2 = weightmean(np.array((self.rhoh2, cubelet.rhoh2)),
+                                            np.array((self.drhoh2, cubelet.drhoh2)), weights=weights)
+
+        # housekeeping **** check averaging (also why is cubelet nuobs_mean a list?)
+        self.catidx = np.concatenate((self.catidx, cubelet.catidx))
+        nuobs_mean = (self.nuobs_mean * self.ncutouts + cubelet.nuobs_mean[0] * cubelet.ncutouts) / (
+                    self.ncutouts + cubelet.ncutouts)
+        self.nuobs_mean = nuobs_mean
+        z_mean = (self.z_mean * self.ncutouts + cubelet.z_mean[0] * cubelet.ncutouts) / (
+                    self.ncutouts + cubelet.ncutouts)
+        self.z_mean = z_mean
+        self.ncutouts = self.ncutouts + cubelet.ncutouts
 
             # print('stacked lco list length: ', len(self.prf_stacklco))
         del (cubelet)
