@@ -677,8 +677,8 @@ class cubelet():
             x = np.arange(self.cubexwidth)
             spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
             dspec = rms * np.ones(len(spec)) #(placeholder)
-            self.spectrum = spec
-            self.spectrumrms = dspec
+        self.spectrum = spec
+        self.spectrumrms = dspec
 
         return spec, dspec
 
@@ -718,36 +718,12 @@ class cubelet():
 
         elif method == 'photometry' or method == 'adaptive_photometry':
 
-            # set up beam model if it hasn't been done already
-            try:
-                beammodel = self.beammodel
-            except AttributeError:
-                beammodel = self.beam_model(params)
+            # the spectrum in get_spectrum is propagated properly as you average in cutouts, so just call that and then average over it
 
-            if method == 'photometry':
-                # initiate photometry objects
-                psfphot = PSFPhotometry(beammodel, (9, 9), aperture_radius=9)
-                initparams = QTable()
-                initparams['x'] = [self.centpix[1]]
-                initparams['y'] = [self.centpix[1]]
-            else:
-                # initiate photometry objects with adaptive centering
-                initparams = QTable()
-                initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
-                initparams['y'] = [self.centpix[1] - 0.5 + self.ypixcent]
-                psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
-                
-            photflux = []
-            photrms = []
-            for i in np.arange(self.apminpix[0], self.apmaxpix[0]):
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore')
-                    output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
-                    photflux.append(output['flux_fit'].value[0])
-                    photrms.append(output['flux_err'].value[0])
+            fullspec, fulldspec = self.get_spectrum(method=method, params=params)
+            spec = fullspec[self.apminpix[0]:self.apmaxpix[0]]
+            dspec = fulldspec[self.apminpix[0]:self.apmaxpix[0]]
 
-            spec = np.array(photflux)
-            dspec = np.array(photrms)
         elif method == 'prf_fitting':
             # skips the stuff after this statement. May need to change.
             # return params.prf_stacklco, params.prf_stacklcorms
