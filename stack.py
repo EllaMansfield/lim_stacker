@@ -24,7 +24,8 @@ from radio_beam import Beam
 from reproject import reproject_adaptive
 
 # for photometric aperture extraction
-from photutils.psf import IntegratedGaussianPRF, PSFPhotometry
+from photutils.psf import PSFPhotometry, CircularGaussianSigmaPRF
+IntegratedGaussianPRF = CircularGaussianSigmaPRF
 from astropy.table import QTable
 
 # for fitting gaussian 3D PRF extraction
@@ -310,23 +311,6 @@ class cubelet():
         else:
             bigweights = None
 
-        self.cube, self.cuberms = weightmean(cubevals, rmsvals, axis=0, weights=bigweights)
-
-        # stack together the single values
-        self.linelum, self.dlinelum = weightmean(np.array((self.linelum, cubelet.linelum)),
-                                                np.array((self.dlinelum, cubelet.dlinelum)), weights=weights)
-        self.rhoh2, self.drhoh2 = weightmean(np.array((self.rhoh2, cubelet.rhoh2)),
-                                            np.array((self.drhoh2, cubelet.drhoh2)), weights=weights)
-
-        # housekeeping **** check averaging (also why is cubelet nuobs_mean a list?)
-        self.catidx = np.concatenate((self.catidx, cubelet.catidx))
-        nuobs_mean = (self.nuobs_mean * self.ncutouts + cubelet.nuobs_mean[0] * cubelet.ncutouts) / (
-                    self.ncutouts + cubelet.ncutouts)
-        self.nuobs_mean = nuobs_mean
-        z_mean = (self.z_mean * self.ncutouts + cubelet.z_mean[0] * cubelet.ncutouts) / (
-                    self.ncutouts + cubelet.ncutouts)
-        self.z_mean = z_mean
-        self.ncutouts = self.ncutouts + cubelet.ncutouts
 
         # if doing adaptive photometry, pull a centered spectrum from the new cubelet and average it in to the saved spectrum
         # *** weights not acocunted for in here
@@ -361,6 +345,25 @@ class cubelet():
             # merge lco lists
             self.prf_stacklco = np.concatenate((self.prf_stacklco, cubelet.prf_stacklco))
             self.prf_stacklcorms = np.concatenate((self.prf_stacklcorms, cubelet.prf_stacklcorms))
+
+
+        self.cube, self.cuberms = weightmean(cubevals, rmsvals, axis=0, weights=bigweights)
+
+        # stack together the single values
+        self.linelum, self.dlinelum = weightmean(np.array((self.linelum, cubelet.linelum)),
+                                                np.array((self.dlinelum, cubelet.dlinelum)), weights=weights)
+        self.rhoh2, self.drhoh2 = weightmean(np.array((self.rhoh2, cubelet.rhoh2)),
+                                            np.array((self.drhoh2, cubelet.drhoh2)), weights=weights)
+
+        # housekeeping **** check averaging (also why is cubelet nuobs_mean a list?)
+        self.catidx = np.concatenate((self.catidx, cubelet.catidx))
+        nuobs_mean = (self.nuobs_mean * self.ncutouts + cubelet.nuobs_mean[0] * cubelet.ncutouts) / (
+                    self.ncutouts + cubelet.ncutouts)
+        self.nuobs_mean = nuobs_mean
+        z_mean = (self.z_mean * self.ncutouts + cubelet.z_mean[0] * cubelet.ncutouts) / (
+                    self.ncutouts + cubelet.ncutouts)
+        self.z_mean = z_mean
+        self.ncutouts = self.ncutouts + cubelet.ncutouts
 
             # print('stacked lco list length: ', len(self.prf_stacklco))
         del (cubelet)
@@ -590,13 +593,13 @@ class cubelet():
             sigma_x = beamsigmapix
             sigma_y = beamsigmapix
             
-            sigma_spec=3
+            sigma_spec = params.specwidth / (2 * np.sqrt(2 * np.log(2)))
             
             # get center values (copied from adaptive photometry)
             x = self.centpix[1] - 0.5 + self.xpixcent
             y = self.centpix[2] - 0.5 + self.ypixcent
             # get central spectral value
-            speccent = self.centpix[0] - 0.5 + self.freqpixcent
+            speccent = self.centpix[0] + self.freqpixcent
             
             #swap axes so fit_amplitude fits things correctly 
             cutout_forfit = self.cube # [freq, x, y]
@@ -672,10 +675,10 @@ class cubelet():
 
         
             x = np.arange(self.cubexwidth)
-            spec = Gaussian1DPRF(x, speccent, sigma_spec, amp)[0]
-            dspec = 10000000 #(placeholder)
-            self.spectrum = spec
-            self.spectrumrms = dspec
+            spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
+            dspec = rms * np.ones(len(spec)) #(placeholder)
+        self.spectrum = spec
+        self.spectrumrms = dspec
 
         return spec, dspec
 
@@ -715,36 +718,12 @@ class cubelet():
 
         elif method == 'photometry' or method == 'adaptive_photometry':
 
-            # set up beam model if it hasn't been done already
-            try:
-                beammodel = self.beammodel
-            except AttributeError:
-                beammodel = self.beam_model(params)
+            # the spectrum in get_spectrum is propagated properly as you average in cutouts, so just call that and then average over it
 
-            if method == 'photometry':
-                # initiate photometry objects
-                psfphot = PSFPhotometry(beammodel, (9, 9), aperture_radius=9)
-                initparams = QTable()
-                initparams['x'] = [self.centpix[1]]
-                initparams['y'] = [self.centpix[1]]
-            else:
-                # initiate photometry objects with adaptive centering
-                initparams = QTable()
-                initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
-                initparams['y'] = [self.centpix[1] - 0.5 + self.ypixcent]
-                psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
-                
-            photflux = []
-            photrms = []
-            for i in np.arange(self.apminpix[0], self.apmaxpix[0]):
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore')
-                    output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
-                    photflux.append(output['flux_fit'].value[0])
-                    photrms.append(output['flux_err'].value[0])
+            fullspec, fulldspec = self.get_spectrum(method=method, params=params)
+            spec = fullspec[self.apminpix[0]:self.apmaxpix[0]]
+            dspec = fulldspec[self.apminpix[0]:self.apmaxpix[0]]
 
-            spec = np.array(photflux)
-            dspec = np.array(photrms)
         elif method == 'prf_fitting':
             # skips the stuff after this statement. May need to change.
             # return params.prf_stacklco, params.prf_stacklcorms
@@ -897,14 +876,15 @@ class cubelet():
                 if params.adaptivephotometry:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
-                if params.prf_fitting:
+
+                elif params.prf_fitting:
                     im, dim = self.get_image()
                     # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
 
                     # Display 1D prf with average L'co value
                     # hard coded value to 3
                     amp = self.get_aperture(method = "prf_fitting", params=params)[0]
-                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, 3, amp)
+                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, params.specwidth/2.355, amp)
                     
                 else:
                     im, dim = self.get_image()
@@ -917,7 +897,7 @@ class cubelet():
                     else:
                         comment.append('Single-field stack')
                 except AttributeError:
-                    comment = ['Single-field stack']
+                    comment = ['Single-field stack']            
 
         else:
             if params.saveplots:
@@ -2349,7 +2329,7 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     nans = np.isnan(cut_cutout_forfit)
     cut_cutout_forfit = cut_cutout_forfit[~nans]
     #don't use rms_array yet. broken.
-    rms_array = rms_array[~nans]
+    #rms_array = rms_array[~nans]
     
     if method == 'least_squares':
         def gauss3D_fitfunc(data):

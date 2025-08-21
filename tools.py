@@ -86,7 +86,7 @@ class parameters():
 
         # integer-valued parameters
         for attr in ['xwidth', 'ywidth', 'freqwidth', 'usefeed', 'voxelhitlimit', 'nthreads', 'rmsscale',
-                     'isolatedpixkernel']:
+                     'isolatedpixkernel', 'specwidth', 'optcut']:
             try:
                 val = int(default_dir[attr])
                 setattr(self, attr, val)
@@ -98,7 +98,7 @@ class parameters():
             self.usefeed = False
 
         # float-valued parameters
-        for attr in ['centfreq', 'beamwidth', 'fitmeanlimit', 'voxelrmslimit', 'isolatedpixcutoff']:
+        for attr in ['centfreq', 'beamwidth', 'fitmeanlimit', 'voxelrmslimit', 'isolatedpixcutoff', 'prf_stacklco']:
             try:
                 val = float(default_dir[attr])
                 setattr(self, attr, val)
@@ -119,6 +119,13 @@ class parameters():
                 warnings.warn("Parameter '"+attr+"' should be boolean", RuntimeWarning)
                 setattr(self, attr, None)
 
+        # prf fitting (string parameter)
+            try:
+                setattr(self, 'prf_fitmethod', default_dir['prf_fitmethod'])
+            except:
+                setattr(self, 'prf_fitmethod', 'curve_fit')
+                warnings.warn("Didn't pass method for PRF fitting, defaulting to 'curve_fit'.")
+
         # make sure you're not trying to plot a cubelet if you're not actually making one
         if not self.cubelet:
             self.plotcubelet = False
@@ -132,7 +139,6 @@ class parameters():
                 self.rotseed = 12345
                 warnings.warn("Missing random seed for rotation. Using 12345 as default", RuntimeWarning)
             self.rng = np.random.default_rng(self.rotseed)
-
 
         try:
             setattr(self, 'fitnbeams', int(default_dir['fitnbeams']))

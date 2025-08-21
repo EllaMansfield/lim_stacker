@@ -108,6 +108,9 @@ adaptivephotometry False
 """ prf_fitting"""
 prf_fitting False
 
+# spectral FWHM assumed for 3D PRF (DTC 2025/06/17)
+specwidth 7
+
 # these 3 may not actually be defaulted in stack.py as of now
 # start with zero Lco to average
 prf_stacklco 0
@@ -116,4 +119,4 @@ prf_stacklco 0
 optcut 40
 
 # method used for fitting amplitude
-prf_fitmethod 'curve_fit'
+prf_fitmethod curve_fit
