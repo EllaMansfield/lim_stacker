@@ -38,9 +38,9 @@ def field_offset_and_stack(mapinst, catinst, params, offrng, method=None):
     # randomly offset the catalogue
     offcat = randomize(mapinst, catinst, params, offrng)
 
-    outcube = field_stacker(mapinst, offcat, params)
+    outcube = field_stack(mapinst, offcat, params)
 
-    return np.array([outcube.linelum, outcube.dlinelum])
+    return np.array([outcube.linelum, outcube.dlinelum]) 
 
 
 def offset_and_stack(maplist, catlist, params, offrng, method=None):
@@ -71,7 +71,8 @@ def offset_and_stack(maplist, catlist, params, offrng, method=None):
     # run the actual stack
     outcube = stacker(maplist, offcatlist, params)
 
-    return np.array([outcube.linelum, outcube.dlinelum])
+
+    return np.array(outcube.get_aperture())
 
 def cat_rand_offset(mapinst, catinst, params, offrng=None):
 
