@@ -120,3 +120,6 @@ optcut 40
 
 # method used for fitting amplitude
 prf_fitmethod curve_fit
+
+# Lorentzian spectral profile for 3D PRF (DTC 2025/10/25)
+sloren False
