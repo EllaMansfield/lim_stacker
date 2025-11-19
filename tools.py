@@ -782,7 +782,7 @@ class catalogue():
         # save to catalog object
         outra, outdec = outvector 
         outra, outdec = np.rad2deg(outra), np.rad2deg(outdec)
-        outra = outra + outmap.ystep
+        outra = outra
         self.coords = SkyCoord(outra*u.deg, -outdec*u.deg)
 
 
@@ -1000,8 +1000,8 @@ class maps():
         # newest iteration flips the ra axis, so undo that:
         if self.xstep < 0:
             self.xstep = -self.xstep
-            self.ra = np.flip(self.ra)
-            self.rabe = np.flip(self.rabe) + self.xstep
+            self.ra = np.flip(self.ra) - self.xstep
+            self.rabe = np.flip(self.rabe)
             self.map = np.flip(self.map, axis=-1)
             self.rms = np.flip(self.rms, axis=-1)
             self.hit = np.flip(self.hit, axis=-1)

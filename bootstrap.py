@@ -38,7 +38,7 @@ def field_offset_and_stack(mapinst, catinst, params, offrng, method=None):
     # randomly offset the catalogue
     offcat = randomize(mapinst, catinst, params, offrng)
 
-    outcube = field_stacker(mapinst, offcat, params)
+    outcube = field_stack(mapinst, offcat, params)
 
     return np.array([outcube.linelum, outcube.dlinelum])
 
@@ -73,7 +73,7 @@ def offset_and_stack(maplist, catlist, params, offrng, method=None):
 
     return np.array([outcube.linelum, outcube.dlinelum])
 
-def cat_rand_offset(mapinst, catinst, params, offrng=None):
+def cat_rand_offset(mapinst, catinst, params, offrng=None, offsize=10):
 
     # set up the rng (use the one passed, or failing that the one in params, or
     # failing that define a new one)
@@ -88,7 +88,7 @@ def cat_rand_offset(mapinst, catinst, params, offrng=None):
     # make a catalogue of random offsets that shouldn't overlap with flux from the actual object
     # 2* as big to make sure there are enough objects included to hit goalnumcutouts
     randcatsize = (3,2*catinst.nobj)
-    randoffs = offrng.uniform(1,5,randcatsize) * np.sign(offrng.uniform(-1,1,randcatsize))
+    randoffs = offrng.uniform(1,offsize,randcatsize) * np.sign(offrng.uniform(-1,1,randcatsize))
 
     offcat = catinst.copy()
 
