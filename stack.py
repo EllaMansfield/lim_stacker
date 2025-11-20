@@ -323,6 +323,8 @@ class cubelet():
                 self.spectrum, self.spectrumrms = oldspec, olddspec
             # get the new adaptive spectrum
             newspec, newdspec = cubelet.get_spectrum(method='adaptive_photometry', params=params)
+            self.prf_stacklco+= [newspec]
+            self.prf_stacklcorms+= [newdspec]
             
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum, self.spectrumrms = spec, dspec
@@ -564,7 +566,7 @@ class cubelet():
                     initparams = QTable()
                     initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
                     initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
-                    psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
+                    psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7,fitter=fitting.LMLSQFitter())
 
                 photflux = []
                 photrms = []
