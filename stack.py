@@ -323,6 +323,8 @@ class cubelet():
                 self.spectrum, self.spectrumrms = oldspec, olddspec
             # get the new adaptive spectrum
             newspec, newdspec = cubelet.get_spectrum(method='adaptive_photometry', params=params)
+            self.prf_stacklco+= [newspec]
+            self.prf_stacklcorms+= [newdspec]
             
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum, self.spectrumrms = spec, dspec
@@ -564,7 +566,7 @@ class cubelet():
                     initparams = QTable()
                     initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
                     initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
-                    psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
+                    psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7,fitter=fitting.LMLSQFitter())
 
                 photflux = []
                 photrms = []
@@ -580,8 +582,12 @@ class cubelet():
                     with warnings.catch_warnings():
                         warnings.simplefilter('ignore')
                         output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
-                        photflux.append(output['flux_fit'].value[0])
-                        photrms.append(output['flux_err'].value[0])
+                        if output['flux_err'].value[0] == 0: #HOTFIX
+                            photflux.append(np.nan)
+                            photrms.append(np.nan)
+                        else:
+                            photflux.append(output['flux_fit'].value[0])
+                            photrms.append(output['flux_err'].value[0])
 
                 spec = np.array(photflux)
                 dspec = np.array(photrms)
@@ -612,9 +618,9 @@ class cubelet():
             
             # fitting method arg for testing purposes.DO NOT USE LEAST_SQUARES.
             amp, pcov = fit_amplitude(x, y, speccent, sigma_x, sigma_y, None, sigma_spec,
-                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, cutout_forfit, rms_array, method=self.prf_fitmethod, optcut = params.optcut)
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, cutout_forfit, rms_array, method=self.prf_fitmethod, optcut = params.optcut, sloren = params.sloren)
             PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, sigma_spec,
-                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp)
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp, sloren = params.sloren)
             rms = np.sqrt(np.diag(pcov))
 
             # add the fit value to the list
@@ -675,7 +681,10 @@ class cubelet():
 
         
             x = np.arange(self.cubexwidth)
-            spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
+            if params.sloren:
+                spec = Lorentz_1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
+            else:
+                spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
             dspec = rms * np.ones(len(spec)) #(placeholder)
         self.spectrum = spec
         self.spectrumrms = dspec
@@ -2230,6 +2239,14 @@ def Gaussian1DPRF(x, xcent=0, xstd=5, total_flux=1):
     gauss1Derf = (total_flux / 2) * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
     return gauss1Derf
 
+def Lorentz_1DPRF(x, xcent=0, xstd=5, total_flux=1):
+    # HACK: code assumes by default FWHM = std * 2.355
+    # but for Lorentzian FWHM = 2*gamma
+    # so we do the following throughout any sloren=True branches
+    gamma = xstd*2.355/2
+    loren1Derf = (total_flux / np.pi) * (np.arctan2((x - xcent + 0.5),gamma) - np.arctan2((x - xcent - 0.5),gamma))
+    return loren1Derf
+
 def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
                 plots=False):
     
@@ -2250,7 +2267,7 @@ def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, to
     return gaussarray
 
 def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
-                ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None):
+                ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None, sloren=False):
     
     # DO NOT specify spatstd if you do not want a circular gaussian. It takes priority.
     if spatstd is not None:
@@ -2264,7 +2281,10 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     spatspec_cube = np.repeat(spatial_array[:, :, np.newaxis], specsize, axis=2)
 
     s = np.arange(0, specsize)
-    specweight = Gaussian1DPRF(s, speccent, specstd, total_flux)
+    if sloren:
+        specweight = Lorentz_1DPRF(s, speccent, specstd, total_flux)
+    else:
+        specweight = Gaussian1DPRF(s, speccent, specstd, total_flux)
 
     # weight cube/rectangular prism based on a gaussian defined by the parameters we input.
     spatspec_cube = spatspec_cube * specweight
@@ -2307,7 +2327,7 @@ def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     return spatspec_cube
 
 def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
-                specsize=200, cutout_forfit=None, rms_array=None, method='curve_fit', optcut = 40):
+                specsize=200, cutout_forfit=None, rms_array=None, method='curve_fit', optcut = 40, sloren=False):
     
     #cut down cube for optimized fitting based on optcut.
     
@@ -2329,7 +2349,7 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     nans = np.isnan(cut_cutout_forfit)
     cut_cutout_forfit = cut_cutout_forfit[~nans]
     #don't use rms_array yet. broken.
-    #rms_array = rms_array[~nans]
+    rms_array = rms_array[~nans]
     
     if method == 'least_squares':
         def gauss3D_fitfunc(data):
@@ -2363,14 +2383,25 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
     
     elif method =='curve_fit':
         # The PRF function fit to the noisy data. 
-        def gauss3d_fitfunc(data, amp):
-            x, y, spec = data
-            func = ((1 / 8)
-                    
-                * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
-                * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
-                * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
-            return amp * func
+        if sloren:
+            spgamma = specstd*2.355/2
+            def gauss3d_fitfunc(data, amp):
+                x, y, spec = data
+                func = ((1 / (4*np.pi))
+                        
+                    * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+                    * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+                    * (np.arctan2((spec - speccent + 0.5),spgamma) - np.arctan2((spec - speccent - 0.5),spgamma)))
+                return amp * func
+        else:
+            def gauss3d_fitfunc(data, amp):
+                x, y, spec = data
+                func = ((1 / 8)
+                        
+                    * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+                    * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+                    * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
+                return amp * func
     
     # I GOT RID OF OPTCUT.
         X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize)) # currently has the y axis flipped I think
@@ -2383,7 +2414,7 @@ def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=No
 
         #theoretically, cuts out nans from the coord array
 
-        popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, cut_cutout_forfit.ravel(), p0=3*10**8, sigma = None, maxfev=2000) #rms_array.ravel
+        popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, cut_cutout_forfit.ravel(), p0=3*10**8, maxfev=2000, sigma=rms_array.ravel(), absolute_sigma=True)
         return popt, pcov
     else:
         print('Not a valid amplitude fitting method :(')
