@@ -15,7 +15,8 @@ from astropy.modeling import models, fitting
 import warnings
 import csv
 import pandas as pd
-from multiprocessing import Queue, Process
+import multiprocessing
+from multiprocessing import Queue, Process, Manager
 
 from spectral_cube import SpectralCube
 from spectral_cube.utils import SpectralCubeWarning
@@ -23,8 +24,14 @@ from radio_beam import Beam
 from reproject import reproject_adaptive
 
 # for photometric aperture extraction
-from photutils.psf import IntegratedGaussianPRF, PSFPhotometry
+from photutils.psf import PSFPhotometry, CircularGaussianSigmaPRF
+IntegratedGaussianPRF = CircularGaussianSigmaPRF
 from astropy.table import QTable
+
+# for fitting gaussian 3D PRF extraction
+from scipy import special as sp
+from scipy.optimize import curve_fit
+from scipy.optimize import least_squares
 
 # ignore warnings:
 # divide by zero
@@ -60,6 +67,13 @@ class cubelet():
         # housekeeping info
         self.unit = 'K'  # params.plotunits ***** this is terrible
         self.adaptivephotometry = params.adaptivephotometry
+        
+        self.prf_fitting = params.prf_fitting
+        self.optcut = params.optcut
+        self.prf_fitmethod = params.prf_fitmethod
+        self.prf_stacklco = []
+        self.prf_stacklcorms = []
+
         self.ncutouts = 1
         self.catidx = [cutout.catidx]
         self.nuobs_mean = [cutout.freq]
@@ -86,6 +100,7 @@ class cubelet():
 
         self.xpixcent = cutout.xpixcent
         self.ypixcent = cutout.ypixcent
+        self.freqpixcent = cutout.freqpixcent
 
         # find the width of the channel in GHz (different if physical spacing)
         # also the width of each pixel
@@ -129,6 +144,12 @@ class cubelet():
         # params info
         self.unit = params.plotunits
         self.adaptivephotometry = params.adaptivephotometry
+
+        self.prf_fitting = params.prf_fitting
+        self.optcut = params.optcut
+        self.prf_fitmethod = params.prf_fitmethod
+        self.prf_stacklco = []
+        self.prf_stacklcorms = []
 
         # read in aperture/cubelet sizes
         self.xwidth = params.xwidth
@@ -209,7 +230,7 @@ class cubelet():
         rmsvals = np.stack((self.cuberms, cutout.cubestackrms))
 
         self.cube, self.cuberms = weightmean(cubevals, rmsvals, axis=0)
-
+        
         # stack together the single values
         self.linelum, self.dlinelum = weightmean(np.array((self.linelum, cutout.linelum)),
                                                 np.array((self.dlinelum, cutout.dlinelum)))
@@ -232,6 +253,21 @@ class cubelet():
 
             spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
             self.spectrum = [spec, dspec]
+        
+        if self.prf_fitting:
+            #this is just much the adaptive_photometry implementation repeated for prf_fitting
+            try:
+                oldspec = self.spectrum
+                olddspec = self.spectrumrms
+            except AttributeError:
+
+                oldspec, olddspec = self.get_spectrum(method='prf_fitting', params=params)
+
+            # get PRF spectrum
+            newspec, newdspec = cubelet.get_spectrum(method='prf_fitting', params=params)
+
+            spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
+            self.spectrum = [spec, dspec]
 
         # housekeeping
         self.catidx.append(cutout.catidx)
@@ -249,7 +285,7 @@ class cubelet():
         if not cubelet:
             del (cubelet)
             return
-
+        
         # stack together the 3d cubelets
         cubevals = np.stack((self.cube, cubelet.cube))
         rmsvals = np.stack((self.cuberms, cubelet.cuberms))
@@ -275,6 +311,44 @@ class cubelet():
         else:
             bigweights = None
 
+
+        # if doing adaptive photometry, pull a centered spectrum from the new cubelet and average it in to the saved spectrum
+        # *** weights not acocunted for in here
+        if self.adaptivephotometry:
+            # calculate the spectrum of the original cubelet object if it hasn't been done yet
+            try:
+                oldspec, olddspec = self.spectrum, self.spectrumrms
+            except AttributeError:
+                oldspec, olddspec = self.get_spectrum(method='adaptive_photometry', params=params)
+                self.spectrum, self.spectrumrms = oldspec, olddspec
+            # get the new adaptive spectrum
+            newspec, newdspec = cubelet.get_spectrum(method='adaptive_photometry', params=params)
+            self.prf_stacklco+= [newspec]
+            self.prf_stacklcorms+= [newdspec]
+            
+            spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
+            self.spectrum, self.spectrumrms = spec, dspec
+
+        if self.prf_fitting:
+            #this is just the adaptive_photometry implementation repeated for prf_fitting
+            try:
+                oldspec = self.spectrum
+                olddspec = self.spectrumrms
+            except AttributeError:
+                oldspec, olddspec = self.get_spectrum(method='prf_fitting', params=params)
+            # get PRF spectrum
+            newspec, newdspec = cubelet.get_spectrum(method='prf_fitting', params=params)
+            
+            #avg it in
+            # for some reason, the stack has a third axis
+            spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
+            self.spectrum, self.spectrumrms = spec, dspec
+
+            # merge lco lists
+            self.prf_stacklco = np.concatenate((self.prf_stacklco, cubelet.prf_stacklco))
+            self.prf_stacklcorms = np.concatenate((self.prf_stacklcorms, cubelet.prf_stacklcorms))
+
+
         self.cube, self.cuberms = weightmean(cubevals, rmsvals, axis=0, weights=bigweights)
 
         # stack together the single values
@@ -293,21 +367,7 @@ class cubelet():
         self.z_mean = z_mean
         self.ncutouts = self.ncutouts + cubelet.ncutouts
 
-        # if doing adaptive photometry, pull a centered spectrum from the new cubelet and average it in to the saved spectrum
-        # *** weights not acocunted for in here
-        if self.adaptivephotometry:
-            # calculate the spectrum of the original cubelet object if it hasn't been done yet
-            try:
-                oldspec, olddspec = self.spectrum, self.spectrumrms
-            except AttributeError:
-                oldspec, olddspec = self.get_spectrum(method='adaptive_photometry', params=params)
-                self.spectrum, self.spectrumrms = oldspec, olddspec
-            # get the new adaptive spectrum
-            newspec, newdspec = cubelet.get_spectrum(method='adaptive_photometry', params=params)
-
-            spec, dspec = weightmean(np.stack((oldspec, newspec)), np.stack((olddspec, newdspec)), axis=0)
-            self.spectrum, self.spectrumrms = spec, dspec
-
+            # print('stacked lco list length: ', len(self.prf_stacklco))
         del (cubelet)
         return
 
@@ -469,8 +529,6 @@ class cubelet():
         return beammodel
 
     def get_spectrum(self, in_place=False, method='weightmean', params=None):
-
-
         if method == 'weightmean' or method == 'summed':
             apspec = self.cube[:, self.apminpix[1]:self.apmaxpix[1], self.apminpix[2]:self.apmaxpix[2]]
             dapspec = self.cuberms[:, self.apminpix[1]:self.apmaxpix[1], self.apminpix[2]:self.apmaxpix[2]]
@@ -508,12 +566,11 @@ class cubelet():
                     initparams = QTable()
                     initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
                     initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
-                    psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
+                    psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7,fitter=fitting.LMLSQFitter())
 
                 photflux = []
                 photrms = []
                 for i in range(self.cube.shape[0]):
-
                     # check channel, if it's fully nan'd out then return a nan for this channel
                     apspec = self.cube[i, self.apminpix[1]:self.apmaxpix[1],
                             self.apminpix[2]:self.apmaxpix[2]]
@@ -525,12 +582,110 @@ class cubelet():
                     with warnings.catch_warnings():
                         warnings.simplefilter('ignore')
                         output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
-                        photflux.append(output['flux_fit'].value[0])
-                        photrms.append(output['flux_err'].value[0])
+                        if output['flux_err'].value[0] == 0: #HOTFIX
+                            photflux.append(np.nan)
+                            photrms.append(np.nan)
+                        else:
+                            photflux.append(output['flux_fit'].value[0])
+                            photrms.append(output['flux_err'].value[0])
 
                 spec = np.array(photflux)
                 dspec = np.array(photrms)
 
+        elif method == "prf_fitting":    
+            # may need to do something here
+            beamsigma = params.beamwidth / (2 * np.sqrt(2 * np.log(2)))
+            beamsigmapix = beamsigma / self.xstep
+            sigma_x = beamsigmapix
+            sigma_y = beamsigmapix
+            
+            sigma_spec = params.specwidth / (2 * np.sqrt(2 * np.log(2)))
+            
+            # get center values (copied from adaptive photometry)
+            x = self.centpix[1] - 0.5 + self.xpixcent
+            y = self.centpix[2] - 0.5 + self.ypixcent
+            # get central spectral value
+            speccent = self.centpix[0] + self.freqpixcent
+            
+            #swap axes so fit_amplitude fits things correctly 
+            cutout_forfit = self.cube # [freq, x, y]
+            cutout_forfit = np.swapaxes(cutout_forfit, 0, 2) # [y, x, freq]
+            cutout_forfit = np.swapaxes(cutout_forfit, 0, 1) # [x, y, freq]
+
+            rms_array = self.cuberms # [freq, x, y]
+            rms_array = np.swapaxes(rms_array, 0, 2) # [y, x, freq]
+            rms_array = np.swapaxes(rms_array, 0, 1) # [x, y, freq]
+            
+            # fitting method arg for testing purposes.DO NOT USE LEAST_SQUARES.
+            amp, pcov = fit_amplitude(x, y, speccent, sigma_x, sigma_y, None, sigma_spec,
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, cutout_forfit, rms_array, method=self.prf_fitmethod, optcut = params.optcut, sloren = params.sloren)
+            PRF_fit = Gaussian3DPRF(x, y, self.nuobs_mean, sigma_x, sigma_y, None, sigma_spec,
+                                    self.cubexwidth, self.cubeywidth, self.cubefreqwidth, amp, sloren = params.sloren)
+            rms = np.sqrt(np.diag(pcov))
+
+            # add the fit value to the list
+            if params.add_to_lcolist:
+                self.prf_stacklco = np.concatenate((self.prf_stacklco, amp))
+                self.prf_stacklcorms = np.concatenate((self.prf_stacklcorms, rms))
+                
+            # unused, placeholder for if we check if the fit is good
+            max_cov = 1
+            if pcov > max_cov:
+                # do something to account for a bad fit
+                pass
+            else:
+                # do all the stuff (indent most of the stuff below)
+                pass
+            
+            # swap PRF_fit from [x, y, freq] back to [freq, x, y] for later use (currently unused)
+            PRF_fit = np.swapaxes(PRF_fit, 0, 2) # [freq, y, x]
+            PRF_fit = np.swapaxes(PRF_fit, 1, 2) # [freq, x, y]
+            
+            '''
+            # do adaptive photometry, but weighted based on model
+            # check if an adaptive spectrum already exists (then just return that)
+            try:
+                spec = self.spectrum
+                dspec = self.spectrumrms 
+            except AttributeError:
+                try:
+                    beammodel = self.beammodel
+                except AttributeError:
+                    beammodel = self.beam_model(params)
+
+                initparams = QTable()
+                initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
+                initparams['y'] = [self.centpix[2] - 0.5 + self.ypixcent]
+                psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
+
+                photflux = []
+                photrms = []
+                for i in range(self.cube.shape[0]):
+                        # check channel, if it's fully nan'd out then return a nan for this channel
+                        apspec = self.cube[i, self.apminpix[1]:self.apmaxpix[1],
+                                self.apminpix[2]:self.apmaxpix[2]]
+                        if len(np.where(np.isnan(apspec.flatten()))[0]) == len(apspec.flatten()):
+                            photflux.append(np.nan)
+                            photrms.append(np.nan)
+                            continue
+
+                        with warnings.catch_warnings():
+                            warnings.simplefilter('ignore')
+                            output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
+                            photflux.append(output['flux_fit'].value[0]*Gaussian1DPRF(i, speccent, sigma_spec, amp)[0]) # weight it
+                            photrms.append(output['flux_err'].value[0]) # unsure how to handle with weighting
+
+                spec = np.array(photflux)
+                dspec = np.array(photrms)
+            '''
+
+        
+            x = np.arange(self.cubexwidth)
+            if params.sloren:
+                spec = Lorentz_1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
+            else:
+                spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, sigma_spec, amp) 
+            dspec = rms * np.ones(len(spec)) #(placeholder)
         self.spectrum = spec
         self.spectrumrms = dspec
 
@@ -572,36 +727,16 @@ class cubelet():
 
         elif method == 'photometry' or method == 'adaptive_photometry':
 
-            # set up beam model if it hasn't been done already
-            try:
-                beammodel = self.beammodel
-            except AttributeError:
-                beammodel = self.beam_model(params)
+            # the spectrum in get_spectrum is propagated properly as you average in cutouts, so just call that and then average over it
 
-            if method == 'photometry':
-                # initiate photometry objects
-                psfphot = PSFPhotometry(beammodel, (9, 9), aperture_radius=9)
-                initparams = QTable()
-                initparams['x'] = [self.centpix[1]]
-                initparams['y'] = [self.centpix[1]]
-            else:
-                # initiate photometry objects with adaptive centering
-                psfphot = PSFPhotometry(beammodel, (7, 7), aperture_radius=7)
-                initparams = QTable()
-                initparams['x'] = [self.centpix[1] - 0.5 + self.xpixcent]
-                initparams['y'] = [self.centpix[1] - 0.5 + self.ypixcent]
+            fullspec, fulldspec = self.get_spectrum(method=method, params=params)
+            spec = fullspec[self.apminpix[0]:self.apmaxpix[0]]
+            dspec = fulldspec[self.apminpix[0]:self.apmaxpix[0]]
 
-            photflux = []
-            photrms = []
-            for i in np.arange(self.apminpix[0], self.apmaxpix[0]):
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore')
-                    output = psfphot(self.cube[i, :, :], error=self.cuberms[i, :, :], init_params=initparams)
-                    photflux.append(output['flux_fit'].value[0])
-                    photrms.append(output['flux_err'].value[0])
-
-            spec = np.array(photflux)
-            dspec = np.array(photrms)
+        elif method == 'prf_fitting':
+            # skips the stuff after this statement. May need to change.
+            # return params.prf_stacklco, params.prf_stacklcorms
+            return weightmean(np.array(self.prf_stacklco), np.array(self.prf_stacklcorms))
 
         else:
             print("Don't know that aperture extraction method")
@@ -687,9 +822,11 @@ class cubelet():
         return np.array(outvallist).flatten(), np.array(outdvallist).flatten()
 
 
-    def get_output_dict(self, in_place=False):
+    def get_output_dict(self, in_place=False, params=None):
         if self.adaptivephotometry:
-            llum, dllum = self.get_aperture(method='adaptive_photometry')  # made changes here
+            llum, dllum = self.get_aperture(method='adaptive_photometry', params=params)
+        elif self.prf_fitting:
+            llum, dllum = self.get_aperture(method='prf_fitting', params=params)
         else:
             llum, dllum = self.get_aperture()  # defaults to weightmean
         self.linelum = llum
@@ -748,6 +885,16 @@ class cubelet():
                 if params.adaptivephotometry:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
+
+                elif params.prf_fitting:
+                    im, dim = self.get_image()
+                    # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
+
+                    # Display 1D prf with average L'co value
+                    # hard coded value to 3
+                    amp = self.get_aperture(method = "prf_fitting", params=params)[0]
+                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, params.specwidth/2.355, amp)
+                    
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -759,7 +906,7 @@ class cubelet():
                     else:
                         comment.append('Single-field stack')
                 except AttributeError:
-                    comment = ['Single-field stack']
+                    comment = ['Single-field stack']            
 
         else:
             if params.saveplots:
@@ -769,6 +916,14 @@ class cubelet():
                 if params.adaptivephotometry:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum(method='adaptive_photometry', params=params)
+                if params.prf_fitting:
+                    im, dim = self.get_image()
+                    # spec, dspec = self.get_spectrum(method='prf_fitting', params=params)
+
+                    # Display 1D prf with average L'co value
+                    # hard coded the std as 3 now, but should make changeable
+                    amp = self.get_aperture(method = "prf_fitting", params=params)[0]
+                    spec = Gaussian1DPRF(np.arange(0, self.cube.shape[0]), self.cube.shape[0]//2, 3, amp)
                 else:
                     im, dim = self.get_image()
                     spec, dspec = self.get_spectrum()
@@ -779,7 +934,7 @@ class cubelet():
                 except AttributeError:
                     comment = ['Multi-field stack']
 
-        outdict = self.get_output_dict()
+        outdict = self.get_output_dict(params=params)
 
         combined_plotter(self, params, stackim=im, stackrms=dim,
                         stackspec=spec, cmap='PiYG_r',
@@ -796,7 +951,7 @@ class cubelet():
         ovalfile = params.datasavepath + fieldstr + '/output_values.csv'
         # strip the values of their units before saving them (otherwise really annoying
         # to read out on the other end)
-        outdict = self.get_output_dict()
+        outdict = self.get_output_dict(params=params)
         outputvals_nu = dict_saver(outdict, ovalfile)
 
         idxfile = params.datasavepath + fieldstr + '/included_cat_indices.npz'
@@ -1069,6 +1224,8 @@ def single_cutout(idx, galcat, comap, params):
     else:
         fdiff = 1
 
+    freqpixcent = (nuobs - comap.freqbe[freqidx])/comap.fstep
+
     # if the map has been rescaled, these arrays will be 2d
     if len(comap.ra.shape) == 2:
 
@@ -1113,7 +1270,6 @@ def single_cutout(idx, galcat, comap, params):
         else:
             ydiff = 1
         ypixcent = (y - comap.decbe[yidx]) / comap.ystep
-
     # if the center voxel of the cutout is a nan, axe it
     if np.isnan(comap.map[freqidx, yidx, xidx]):
         return None
@@ -1134,6 +1290,7 @@ def single_cutout(idx, galcat, comap, params):
     cutout.fstep = comap.fstep
     cutout.xpixcent = xpixcent
     cutout.ypixcent = ypixcent
+    cutout.freqpixcent = freqpixcent
     cutout.fstep = comap.fstep
 
     # these things depend on cosmogrid 
@@ -1335,6 +1492,11 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
     assumes comap is already in the desired units
     """
 
+
+    # default values for optpimization cutting. Default is an entire 81 pixel spectrum with optcut = 40.
+    if not params.optcut:
+        params.optcut = 40
+
     # set up for rotating each cutout randomly if that's set to happen
     if params.rotate:
         params.rng = np.random.default_rng(params.rotseed)
@@ -1375,7 +1537,7 @@ def field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
                 stackinst_new = cubelet(cutout, params)
                 if stackinst_new.unit != 'linelum':
                     stackinst_new.to_linelum(params)
-                stackinst.stackin_cubelet(stackinst_new, params, weights=weight)  # Added 'params' here
+                stackinst.stackin_cubelet(stackinst_new, params, weights=weight)
 
             if goalnobj:
                 field_nobj += 1     
@@ -1417,6 +1579,7 @@ def field_stack_queued(comap, galcat, params, field, queue):
     
     
 def parallel_field_stack(comap, galcat, params, field=None, goalnobj=None, weights=None):
+    print('starting parallel stack')
     """
     same as field_stack, but will parallelize the catalog objects
     called if params.parallelize is True
@@ -1425,50 +1588,116 @@ def parallel_field_stack(comap, galcat, params, field=None, goalnobj=None, weigh
     """
 
     # housekeeping
-
-    # init queue object
-    qout = Queue()
     
-    # assign catalog objects to processes
-    roundnobj = galcat.nobj // params.nthreads * params.nthreads
-    idxlist = np.arange(roundnobj)
-    remainder = np.arange(roundnobj, roundnobj + galcat.nobj%params.nthreads)
+    if params.prf_fitting:
+        # handle stacklco lists here
 
-    pidxs = np.reshape(idxlist, (params.nthreads,-1))
+        # default values for optpimization cutting. Default is an entire 81 pixel spectrum with optcut = 40.
+        if not params.optcut:
+            params.optcut = 40
+        
+        # init queue object
+        qout = Queue()
+        
+        # assign catalog objects to processes
+        roundnobj = galcat.nobj // params.nthreads * params.nthreads
+        idxlist = np.arange(roundnobj)
+        remainder = np.arange(roundnobj, roundnobj + galcat.nobj%params.nthreads)
 
-    processes = []
-    for j in range(params.nthreads):
-        tidx = pidxs[j]
-        if j == params.nthreads - 1:
-            tidx = np.concatenate((tidx, remainder))
+        pidxs = np.reshape(idxlist, (params.nthreads,-1))
+        
+        processes = []
+        for j in range(params.nthreads):
+            tidx = pidxs[j]
+            if j == params.nthreads - 1:
+                tidx = np.concatenate((tidx, remainder))
 
-        pcatinst = galcat.subset(tidx, in_place=False)
+            pcatinst = galcat.subset(tidx, in_place=False)
 
-        processes.append(Process(target=field_stack_queued, args=(comap, pcatinst, params, field, qout)))
+            processes.append(Process(target=field_stack_queued, args=(comap, pcatinst, params, field, qout)))
 
-    # run processes
-    for p in processes:
-        p.start()
-    cubelist = [qout.get() for p in processes]
-    for p in processes:
-        p.join()
+        # run processes
+        for p in processes:
+            p.start()   
 
-    # join together all the cubes for the field
-    # (it's so involved to deal with nones)
-    finalcubelist = []
-    for cube in cubelist:
-        if cube:
-            finalcubelist.append(cube)
+        cubelist = [qout.get() for p in processes]
 
-    if len(finalcubelist) == 0:
-        finalcube = None
-    elif len(finalcubelist) == 1:
-        finalcube = finalcubelist[0].copy()
+        for p in processes:
+            p.join()
+
+        # join together all the cubes for the field
+        # (it's so involved to deal with nones)
+        finalcubelist = []
+        for cube in cubelist:
+            if cube:
+                finalcubelist.append(cube)
+
+        if len(finalcubelist) == 0:
+            finalcube = None
+        elif len(finalcubelist) == 1:
+            finalcube = finalcubelist[0].copy()
+        else:
+            finalcube = finalcubelist[0].copy()
+            for cube in finalcubelist[1:]:
+                params.add_to_lcolist = False
+                finalcube.stackin_cubelet(cube, params)
+            params.add_to_lcolist = True
     else:
-        finalcube = finalcubelist[0].copy()
-        for cube in finalcubelist[1:]:
-            finalcube.stackin_cubelet(cube)
+        '''# empty lists for prf_fitting luminosity values to be weighted together
+        print('redefining lco list param in parallel_field_stack')
+        params.prf_stacklco = []
+        params.prf_stacklcorms = []
+        params.add_to_lcolist = True
 
+        # default values for optpimization cutting. Default is an entire 81 pixel spectrum with optcut = 40.
+        if not params.optcut:
+            params.optcut = 40'''
+        
+        # init queue object
+        qout = Queue()
+        
+        # assign catalog objects to processes
+        roundnobj = galcat.nobj // params.nthreads * params.nthreads
+        idxlist = np.arange(roundnobj)
+        remainder = np.arange(roundnobj, roundnobj + galcat.nobj%params.nthreads)
+
+        pidxs = np.reshape(idxlist, (params.nthreads,-1))
+
+        processes = []
+        for j in range(params.nthreads):
+            tidx = pidxs[j]
+            if j == params.nthreads - 1:
+                tidx = np.concatenate((tidx, remainder))
+
+            pcatinst = galcat.subset(tidx, in_place=False)
+
+            processes.append(Process(target=field_stack_queued, args=(comap, pcatinst, params, field, qout)))
+
+        # run processes
+        for p in processes:
+            p.start()   
+
+        cubelist = [qout.get() for p in processes]
+
+        for p in processes:
+            p.join()
+
+        # join together all the cubes for the field
+        # (it's so involved to deal with nones)
+        finalcubelist = []
+        for cube in cubelist:
+            if cube:
+                finalcubelist.append(cube)
+
+        if len(finalcubelist) == 0:
+            finalcube = None
+        elif len(finalcubelist) == 1:
+            finalcube = finalcubelist[0].copy()
+        else:
+            finalcube = finalcubelist[0].copy()
+            for cube in finalcubelist[1:]:
+                finalcube.stackin_cubelet(cube, params)
+    
     # return finalcubelist
     return finalcube
 
@@ -1494,6 +1723,9 @@ def stacker(maplist, catlist, params):
     else:
         numcutoutlist = [None, None, None]
 
+    # create default param for prf fitting lco list
+    if params.prf_fitting:
+        params.add_to_lcolist = True
     # change units of the map
     # if maplist[0].unit != 'linelum':
     #     if params.verbose:
@@ -1522,9 +1754,13 @@ def stacker(maplist, catlist, params):
         print('Field {} complete'.format(fields[i]))
 
     # combine everything together into one stack
+
+    # stops prf fitting from adding extra averages to the raw amplitude lco list
+    params.add_to_lcolist = False
+
     stackedcube = cubelist[0]
-    stackedcube.stackin_cubelet(cubelist[1])
-    stackedcube.stackin_cubelet(cubelist[2])
+    stackedcube.stackin_cubelet(cubelist[1], params)
+    stackedcube.stackin_cubelet(cubelist[2], params)
 
     llum, dllum = stackedcube.get_aperture()
 
@@ -1998,3 +2234,188 @@ def observer_units(Tvals, rmsvals, zvals, nuobsvals, params):
                 'nuobs_mean': meannuobs, 'z_mean': meanz}
 
     return obsunitdict
+
+def Gaussian1DPRF(x, xcent=0, xstd=5, total_flux=1):
+    gauss1Derf = (total_flux / 2) * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+    return gauss1Derf
+
+def Lorentz_1DPRF(x, xcent=0, xstd=5, total_flux=1):
+    # HACK: code assumes by default FWHM = std * 2.355
+    # but for Lorentzian FWHM = 2*gamma
+    # so we do the following throughout any sloren=True branches
+    gamma = xstd*2.355/2
+    loren1Derf = (total_flux / np.pi) * (np.arctan2((x - xcent + 0.5),gamma) - np.arctan2((x - xcent - 0.5),gamma))
+    return loren1Derf
+
+def Gaussian2DPRF(xcent=50, ycent=50, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1,
+                plots=False):
+    
+    def Gaussian2Derf(x, y, xcent, ycent, xstd=10, ystd=10, xsize=100, ysize=100, total_flux=1):
+        gauss2Derf = (total_flux / 4) * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf(
+        (x - xcent - 0.5) / (np.sqrt(2) * xstd))) * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf(
+        (y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+        return gauss2Derf
+
+    x, y = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize))
+    gaussarray = Gaussian2Derf(x, y, xcent, ycent, xstd, ystd, xsize, ysize, total_flux)
+
+    if plots:
+        plt.imshow(gaussarray, cmap='gist_heat')
+        plt.colorbar()
+        plt.show()
+
+    return gaussarray
+
+def Gaussian3DPRF(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100,
+                ysize=100, specsize=200, total_flux=1, plots=False, plot_interval=None, sloren=False):
+    
+    # DO NOT specify spatstd if you do not want a circular gaussian. It takes priority.
+    if spatstd is not None:
+        xstd = spatstd
+        ystd = spatstd
+
+    # Makes the 2D profile
+    spatial_array = Gaussian2DPRF(xcent, ycent, xstd, ystd, xsize, ysize, 1, plots=False)
+
+    # make a 3D array with the 2D array duplicated in the new axis
+    spatspec_cube = np.repeat(spatial_array[:, :, np.newaxis], specsize, axis=2)
+
+    s = np.arange(0, specsize)
+    if sloren:
+        specweight = Lorentz_1DPRF(s, speccent, specstd, total_flux)
+    else:
+        specweight = Gaussian1DPRF(s, speccent, specstd, total_flux)
+
+    # weight cube/rectangular prism based on a gaussian defined by the parameters we input.
+    spatspec_cube = spatspec_cube * specweight
+
+    if plots:
+        if plot_interval is None:
+            plot_interval = specstd
+
+        spatspec_front = spatspec_cube[:, :, int(speccent) - int(plot_interval)]
+        spatspec_middle = spatspec_cube[:, :, int(speccent)]
+        spatspec_back = spatspec_cube[:, :, int(speccent) + int(plot_interval)]
+
+        # Just scaling the colormaps to be the same across all plots
+        scalestack = np.vstack((spatspec_front, spatspec_middle, spatspec_back))
+        vmin = np.min(scalestack)
+        vmax = np.max(scalestack)
+
+        # plot the stuff
+        fig, axs = plt.subplots(1, 3, figsize=(20, 5))
+        xsection0 = axs[0].imshow(spatspec_front, cmap='gist_heat', vmin=vmin, vmax=vmax)
+        ax0title = 'z = ' + str(
+            int(speccent) - int(plot_interval))  # matplotlib was being moody, so I'm defining the title externally
+        axs[0].set_title(ax0title)
+
+        xsection1 = axs[1].imshow(spatspec_middle, cmap='gist_heat', vmin=vmin, vmax=vmax)
+        ax1title = 'z = ' + str(int(speccent))
+        axs[1].set_title(ax1title)
+
+        xsection2 = axs[2].imshow(spatspec_back, cmap='gist_heat', vmin=vmin, vmax=vmax)
+        ax2title = 'z = ' + str(int(speccent) + int(plot_interval))
+        axs[2].set_title(ax2title)
+
+        fig.suptitle('Snapshots of spectral axis \n std dev: ' + str(specstd) + '\n Interval: ' + str(
+            plot_interval) + '\n center: z=' + str(speccent))
+        fig.colorbar(xsection2, ax=axs[2])
+
+        plt.tight_layout()
+        plt.show()
+
+    return spatspec_cube
+
+def fit_amplitude(xcent=50, ycent=50, speccent=100, xstd=10, ystd=10, spatstd=None, specstd=20, xsize=100, ysize=100,
+                specsize=200, cutout_forfit=None, rms_array=None, method='curve_fit', optcut = 40, sloren=False):
+    
+    #cut down cube for optimized fitting based on optcut.
+    
+    # assumes always odd length for centering
+    center = (specsize // 2)
+    speccut_min = center - optcut
+    speccut_max = center + optcut
+
+
+    # don't change the actual cutout, so cut_cutout_forfit is the thing we actually get the amplitude from, 
+    # which is handeled then in get_spectrum()
+    cut_cutout_forfit = cutout_forfit[:,:, speccut_min:speccut_max+1] # will concatenate wrong right now
+    #spatstd takes priority and assigns to both xstd and ystd
+    if spatstd != None:
+        xstd = spatstd
+        ystd = spatstd
+    
+    # don't fit to nans
+    nans = np.isnan(cut_cutout_forfit)
+    cut_cutout_forfit = cut_cutout_forfit[~nans]
+    #don't use rms_array yet. broken.
+    rms_array = rms_array[~nans]
+    
+    if method == 'least_squares':
+        def gauss3D_fitfunc(data):
+            x, y, spec = data
+            func = ((1 / 8)
+                * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+                * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+                * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
+            return func
+        
+        # define a gaussian function normalized to 1 with the specified centers and stds for our cubelet size
+        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, int(optcut*2 + 1)))
+        coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
+        func = gauss3D_fitfunc(coorddata)
+        
+        def residuals(param, cut_cutout_forfit):
+            prediction = param*func
+            residuals = (cut_cutout_forfit - prediction) # /rms_array)
+            return residuals
+        
+        soln = least_squares(residuals, 20**8, args=(cut_cutout_forfit.ravel(), )) #, rms_array.ravel()
+        popt = soln.x
+
+        # I took this directly from stackexchange and I think it might be wrong
+        U, s, Vh = np.linalg.svd(soln.jac, full_matrices=False)
+        tol = np.finfo(float).eps*s[0]*max(soln.jac.shape)
+        w = s > tol
+        pcov = (Vh[w].T/s[w]**2) @ Vh[w]
+
+        return popt, pcov
+    
+    elif method =='curve_fit':
+        # The PRF function fit to the noisy data. 
+        if sloren:
+            spgamma = specstd*2.355/2
+            def gauss3d_fitfunc(data, amp):
+                x, y, spec = data
+                func = ((1 / (4*np.pi))
+                        
+                    * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+                    * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+                    * (np.arctan2((spec - speccent + 0.5),spgamma) - np.arctan2((spec - speccent - 0.5),spgamma)))
+                return amp * func
+        else:
+            def gauss3d_fitfunc(data, amp):
+                x, y, spec = data
+                func = ((1 / 8)
+                        
+                    * (sp.erf((x - xcent + 0.5) / (np.sqrt(2) * xstd)) - sp.erf((x - xcent - 0.5) / (np.sqrt(2) * xstd)))
+                    * (sp.erf((y - ycent + 0.5) / (np.sqrt(2) * ystd)) - sp.erf((y - ycent - 0.5) / (np.sqrt(2) * ystd)))
+                    * (sp.erf((spec - speccent + 0.5) / (np.sqrt(2) * specstd)) - sp.erf((spec - speccent - 0.5) / (np.sqrt(2) * specstd))))
+                return amp * func
+    
+    # I GOT RID OF OPTCUT.
+        X, Y, SPEC = np.meshgrid(np.arange(0, xsize), np.arange(0, ysize), np.arange(0, specsize)) # currently has the y axis flipped I think
+        
+        # don't fit to nans
+        X = X[~nans]
+        Y = Y[~nans]
+        SPEC = SPEC[~nans]
+        coorddata = np.vstack((X.ravel(), Y.ravel(), SPEC.ravel()))
+
+        #theoretically, cuts out nans from the coord array
+
+        popt, pcov = curve_fit(gauss3d_fitfunc, coorddata, cut_cutout_forfit.ravel(), p0=3*10**8, maxfev=2000, sigma=rms_array.ravel(), absolute_sigma=True)
+        return popt, pcov
+    else:
+        print('Not a valid amplitude fitting method :(')
+

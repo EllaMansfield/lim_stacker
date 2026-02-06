@@ -86,7 +86,7 @@ class parameters():
 
         # integer-valued parameters
         for attr in ['xwidth', 'ywidth', 'freqwidth', 'usefeed', 'voxelhitlimit', 'nthreads', 'rmsscale',
-                     'isolatedpixkernel']:
+                     'isolatedpixkernel', 'specwidth', 'optcut']:
             try:
                 val = int(default_dir[attr])
                 setattr(self, attr, val)
@@ -98,7 +98,7 @@ class parameters():
             self.usefeed = False
 
         # float-valued parameters
-        for attr in ['centfreq', 'beamwidth', 'fitmeanlimit', 'voxelrmslimit', 'isolatedpixcutoff']:
+        for attr in ['centfreq', 'beamwidth', 'fitmeanlimit', 'voxelrmslimit', 'isolatedpixcutoff', 'prf_stacklco']:
             try:
                 val = float(default_dir[attr])
                 setattr(self, attr, val)
@@ -108,16 +108,23 @@ class parameters():
 
         # boolean parameters
         for attr in ['cubelet', 'obsunits', 'rotate', 'lowmodefilter', 'chanmeanfilter',
-                     'specmeanfilter', 'verbose', 'returncutlist', 'savedata', 'saveplots',
-                     'savefields', 'plotspace', 'plotfreq', 'plotcubelet', 'physicalspace',
-                     'parallelize', 'adaptivephotometry', 'cosmogrid', 'scalermscuts',
-                     'maskisolatedpix']:
+                    'specmeanfilter', 'verbose', 'returncutlist', 'savedata', 'saveplots',
+                    'savefields', 'plotspace', 'plotfreq', 'plotcubelet', 'physicalspace',
+                    'parallelize', 'adaptivephotometry', 'cosmogrid', 'scalermscuts',
+                    'maskisolatedpix', 'prf_fitting']:
             try:
                 val = default_dir[attr] == 'True'
                 setattr(self, attr, val)
             except:
                 warnings.warn("Parameter '"+attr+"' should be boolean", RuntimeWarning)
                 setattr(self, attr, None)
+
+        # prf fitting (string parameter)
+            try:
+                setattr(self, 'prf_fitmethod', default_dir['prf_fitmethod'])
+            except:
+                setattr(self, 'prf_fitmethod', 'curve_fit')
+                warnings.warn("Didn't pass method for PRF fitting, defaulting to 'curve_fit'.")
 
         # make sure you're not trying to plot a cubelet if you're not actually making one
         if not self.cubelet:
@@ -132,7 +139,6 @@ class parameters():
                 self.rotseed = 12345
                 warnings.warn("Missing random seed for rotation. Using 12345 as default", RuntimeWarning)
             self.rng = np.random.default_rng(self.rotseed)
-
 
         try:
             setattr(self, 'fitnbeams', int(default_dir['fitnbeams']))
@@ -410,7 +416,7 @@ class catalogue():
                     self.z = inputdict.pop('redshift')
                 except:
                     warnings.warn('No redshift in input catalogue', RuntimeWarning)
-
+            
             # coordinates
             try:
                 # fix skycoords wrapping thing around zero by just adding 3 deg to all ra coordinates if this is a simulation
@@ -776,7 +782,7 @@ class catalogue():
         # save to catalog object
         outra, outdec = outvector 
         outra, outdec = np.rad2deg(outra), np.rad2deg(outdec)
-        outra = outra + outmap.ystep
+        outra = outra
         self.coords = SkyCoord(outra*u.deg, -outdec*u.deg)
 
 
@@ -994,8 +1000,8 @@ class maps():
         # newest iteration flips the ra axis, so undo that:
         if self.xstep < 0:
             self.xstep = -self.xstep
-            self.ra = np.flip(self.ra)
-            self.rabe = np.flip(self.rabe) + self.xstep
+            self.ra = np.flip(self.ra) - self.xstep
+            self.rabe = np.flip(self.rabe)
             self.map = np.flip(self.map, axis=-1)
             self.rms = np.flip(self.rms, axis=-1)
             self.hit = np.flip(self.hit, axis=-1)
@@ -1781,7 +1787,7 @@ def weightmean(vals, rmss, axis=None, weights=None):
         weights = weights / rmss**2 # *** probably going to have to worry about the shape of the weights array
     else:
         weights = 1/rmss**2
-
+        
     meanval = np.nansum(vals*weights, axis=axis) / np.nansum(1*weights, axis=axis)
     meanrms = np.sqrt(1/np.nansum(1*weights, axis=axis))
 

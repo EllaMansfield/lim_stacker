@@ -104,3 +104,22 @@ cosmogrid False
 
 """ adaptive photometry """
 adaptivephotometry False
+
+""" prf_fitting"""
+prf_fitting False
+
+# spectral FWHM assumed for 3D PRF (DTC 2025/06/17)
+specwidth 7
+
+# these 3 may not actually be defaulted in stack.py as of now
+# start with zero Lco to average
+prf_stacklco 0
+
+# number of pixels on either side of central pixel for optimized fitting
+optcut 40
+
+# method used for fitting amplitude
+prf_fitmethod curve_fit
+
+# Lorentzian spectral profile for 3D PRF (DTC 2025/10/25)
+sloren False

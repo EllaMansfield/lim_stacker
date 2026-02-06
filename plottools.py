@@ -860,11 +860,11 @@ def combined_plotter(cube, params, stackim=None, stackrms=None, stackspec=None, 
     xarr = np.linspace(-arrext, arrext, 200)
 
     counts, _, _ = sbax.hist(apvid/1e10, color='indigo', bins=100)
-
+    yext = sbax.get_ylim()
+    
     try:
         fitopt, fitcov = curve_fit(gauss, bincents, counts, p0=[2000,0,2])
         sbax.plot(xarr, gauss(xarr, *fitopt), color='orange', lw=2)
-        yext = sbax.get_ylim()
         sbax.set_xlim((-4*fitopt[2],4*fitopt[2]))
 
         sbax.axvline(fitopt[1], color='orange', ls='--', lw=2)
